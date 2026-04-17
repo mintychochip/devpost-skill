@@ -7,11 +7,28 @@ Browse, scout, and manage hackathons on Devpost from the command line.
 ```bash
 cd devpost-mcp
 pip install -e .
+playwright install chromium
+```
+
+## Authentication (for Submissions)
+
+To submit projects or manage your submissions, set environment variables:
+
+```bash
+export DEVPOST_EMAIL="your@email.com"
+export DEVPOST_PASSWORD="your_password"
+```
+
+Or add to `~/.hermes/.env` or your shell profile.
+
+Check auth status:
+```bash
+devpost auth status
 ```
 
 ## Usage
 
-### Browse Hackathons
+### Browse Hackathons (No Auth Required)
 
 ```bash
 # List open hackathons
@@ -25,143 +42,127 @@ devpost search "AI"
 
 # Sort by prize amount
 devpost list --sort prize-amount
-```
 
-### Deep Scrape (Works for Past Hackathons)
-
-```bash
-# Scrape any hackathon by URL - works even for closed events
-devpost scrape https://datahacks-2025.devpost.com/
-
-# Save to JSON
-devpost scrape https://datahacks-2025.devpost.com/ --json
-
-# Save to file
-devpost scrape https://datahacks-2025.devpost.com/ -o datahacks.json
-```
-
-### Get Hackathon Info
-
-```bash
-# By slug (the part before .devpost.com)
+# Get hackathon info by slug
 devpost info zervehack
 devpost info datahacks-2025
-
-# Output as JSON
-devpost info datahacks-2025 --json
 ```
 
-### Browse Projects
+### Submit Projects (Auth Required)
 
 ```bash
-# List projects from a hackathon
-devpost projects https://datahacks-2025.devpost.com/
+# Submit to a hackathon (dry run first)
+devpost submit zervehack \
+  --title "My Awesome Project" \
+  --tagline "An AI-powered solution for X" \
+  --description "Full markdown description here..." \
+  --built-with "Python,FastAPI,OpenAI" \
+  --github "https://github.com/user/repo" \
+  --demo "https://example.com" \
+  --dry-run
 
-# Only show winners
-devpost projects https://datahacks-2025.devpost.com/ --winners
+# Actually submit (remove --dry-run)
+devpost submit zervehack \
+  --title "My Awesome Project" \
+  --tagline "An AI-powered solution for X" \
+  --built-with "Python,OpenAI" \
+  --github "https://github.com/user/repo"
 
-# Get more projects
-devpost projects https://datahacks-2025.devpost.com/ --limit 50
+# List your submissions
+devpost my-submissions
 
-# Export as JSON
-devpost projects https://datahacks-2025.devpost.com/ --json
+# Update a submission
+devpost update https://devpost.com/software/my-project \
+  --tagline "Updated tagline"
 ```
 
-### Get Project Details
+### Deep Scrape (Partially Working)
 
 ```bash
-# Deep dive into a specific project
-devpost project https://devpost.com/software/onlydance
-
-# Export as JSON
-devpost project https://devpost.com/software/onlydance --json
-```
-
-## Use Cases
-
-### Competition Scouting
-
-```bash
-# Find last year's winners
-devpost list --state closed --sort submission-deadline | head -20
-devpost scrape https://datahacks-2025.devpost.com/ --winners
-devpost projects https://datahacks-2025.devpost.com/ --winners --limit 10
-```
-
-### Track Analysis
-
-```bash
-# Get all projects from a specific hackathon
-devpost projects https://some-hackathon.devpost.com/ --json > projects.json
-
-# Analyze with jq
-cat projects.json | jq '.[] | select(.is_winner)' | jq -s 'length'
-```
-
-### Prize Comparison
-
-```bash
-# Find hackathons with big prizes
-devpost list --sort prize-amount --limit 20
-```
-
-## Authentication (for Submissions)
-
-Not yet implemented. For now, this is read-only scouting.
-
-```bash
-# Check auth status
-devpost auth status
-```
-
-## Examples
-
-### Scout DataHacks 2025
-
-```bash
-# Get hackathon overview
+# Scrape hackathon page (may be blocked by Cloudflare)
 devpost scrape https://datahacks-2025.devpost.com/
 
-# List all projects
-devpost projects https://datahacks-2025.devpost.com/ --limit 50
+# List projects from gallery (may be blocked)
+devpost projects https://datahacks-2025.devpost.com/
+devpost projects https://datahacks-2025.devpost.com/ --winners
 
-# Deep dive on a winner
+# Get project details
 devpost project https://devpost.com/software/onlydance
 ```
 
-### Find Upcoming AI Hackathons
-
-```bash
-devpost search "AI" --limit 20
-devpost list --state upcoming --query "machine learning"
-```
-
-### Export Data for Analysis
-
-```bash
-# Get all projects as JSON
-devpost projects https://datahacks-2025.devpost.com/ --limit 100 --json > datahacks.json
-
-# Get hackathon metadata
-devpost scrape https://datahacks-2025.devpost.com/ --json > datahacks_meta.json
-```
+**Note:** Deep scraping is blocked by Devpost's Cloudflare protection. API-based commands (`list`, `info`, `search`) work fine.
 
 ## CLI Reference
 
+### Public Commands (No Auth)
 | Command | Description |
 |---------|-------------|
 | `devpost list` | List hackathons |
 | `devpost info <slug>` | Get hackathon by slug |
-| `devpost scrape <url>` | Deep scrape hackathon page |
-| `devpost projects <url>` | List projects from gallery |
-| `devpost project <url>` | Get project details |
 | `devpost search <query>` | Search hackathons |
+| `devpost scrape <url>` | Scrape hackathon page (blocked) |
+| `devpost projects <url>` | List gallery projects (blocked) |
+| `devpost project <url>` | Get project details (blocked) |
+
+### Authenticated Commands (Requires Auth)
+| Command | Description |
+|---------|-------------|
 | `devpost auth status` | Check authentication |
+| `devpost submit <slug>` | Submit project to hackathon |
+| `devpost my-submissions` | List your projects |
+| `devpost update <url>` | Update existing submission |
 
-## Global Options
+## Examples
 
-- `--json` - Output as JSON instead of pretty tables
-- `--output, -o <path>` - Save to file
+### Full Submission Workflow
+
+```bash
+# 1. Find a hackathon
+devpost list --state open --sort submission-deadline
+
+# 2. Get details
+devpost info zervehack
+
+# 3. Submit (dry run first)
+devpost submit zervehack \
+  --title "Hermes Devpost CLI" \
+  --tagline "Command line tool for managing Devpost submissions" \
+  --built-with "Python,Click,Playwright" \
+  --github "https://github.com/mintychochip/devpost-mcp" \
+  --dry-run
+
+# 4. Actually submit
+devpost submit zervehack \
+  --title "Hermes Devpost CLI" \
+  --tagline "Command line tool for managing Devpost submissions" \
+  --built-with "Python,Click,Playwright" \
+  --github "https://github.com/mintychochip/devpost-mcp"
+
+# 5. Check your submissions
+devpost my-submissions
+```
+
+### Managing Submissions
+
+```bash
+# List all your projects
+devpost my-submissions
+
+# Update a project's tagline
+devpost update https://devpost.com/software/hermes-devpost-cli \
+  --tagline "Updated: Now with authentication support!"
+
+# Update multiple fields
+devpost update https://devpost.com/software/hermes-devpost-cli \
+  --title "Hermes Devpost CLI v2" \
+  --description "## New Features\n\n- Authentication\n- Submit projects\n- Update submissions"
+```
+
+## Known Issues
+
+1. **Scraping blocked:** Devpost uses Cloudflare which blocks automated browsers. API commands work, but scraping past hackathons doesn't.
+
+2. **Screenshot uploads:** Not yet implemented (form interaction is complex).
 
 ## License
 

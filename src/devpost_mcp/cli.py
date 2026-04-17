@@ -339,6 +339,241 @@ class DevpostClient:
         return tag.get("content") if tag else None
 
 
+class AuthenticatedDevpostClient:
+    """Authenticated client for Devpost submissions using browser automation."""
+
+    def __init__(self, email: str, password: str) -> None:
+        self.email = email
+        self.password = password
+        self.browser = None
+        self.context = None
+        self.page = None
+
+    async def __aenter__(self):
+        if not HAS_PLAYWRIGHT:
+            raise Exception("Playwright required for authenticated operations")
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+        return False
+
+    async def close(self) -> None:
+        if self.context:
+            await self.context.close()
+        if self.browser:
+            await self.browser.close()
+
+    async def _ensure_logged_in(self) -> None:
+        """Ensure browser is launched and logged into Devpost."""
+        if self.page:
+            return
+
+        async with async_playwright() as p:
+            self.browser = await p.chromium.launch(headless=True)
+            self.context = await self.browser.new_context(
+                viewport={"width": 1920, "height": 1080},
+            )
+            self.page = await self.context.new_page()
+
+            # Navigate to login page
+            await self.page.goto("https://devpost.com/users/login", wait_until="networkidle")
+
+            # Check if already logged in
+            if await self.page.locator("a[href='/users/logout']").count() > 0:
+                console.print("[green]Already logged in (session restored)[/green]")
+                return
+
+            # Fill login form
+            await self.page.fill("input[name='user[email]']", self.email)
+            await self.page.fill("input[name='user[password]']", self.password)
+
+            # Click login button
+            await self.page.click("input[type='submit']")
+
+            # Wait for navigation
+            try:
+                await self.page.wait_for_url("https://devpost.com/", timeout=10000)
+                console.print("[green]Login successful[/green]")
+            except Exception:
+                # Check for error message
+                error = await self.page.locator(".error, .alert-error").text_content()
+                if error:
+                    raise Exception(f"Login failed: {error}")
+                raise Exception("Login failed - check credentials")
+
+    async def submit_project(
+        self,
+        hackathon_slug: str,
+        title: str,
+        tagline: str,
+        description: Optional[str] = None,
+        built_with: Optional[list[str]] = None,
+        links: Optional[dict] = None,
+        dry_run: bool = False,
+    ) -> dict:
+        """Submit a new project to a hackathon."""
+        await self._ensure_logged_in()
+
+        if dry_run:
+            return {
+                "dry_run": True,
+                "hackathon": hackathon_slug,
+                "title": title,
+                "tagline": tagline,
+                "description": description,
+                "built_with": built_with,
+                "links": links,
+            }
+
+        # Navigate to hackathon submission page
+        submit_url = f"https://{hackathon_slug}.devpost.com/"
+        await self.page.goto(submit_url, wait_until="networkidle")
+
+        # Look for "Submit project" button
+        submit_button = self.page.locator("a:has-text('Submit project'), a:has-text('Start submission')").first
+        if await submit_button.count() == 0:
+            raise Exception("Submit button not found - hackathon may not be accepting submissions")
+
+        await submit_button.click()
+        await self.page.wait_for_url("**/software/new**", timeout=15000)
+
+        # Fill submission form
+        await self.page.fill("input[name='software[name]']", title)
+        await self.page.fill("input[name='software[tagline]']", tagline)
+
+        if description:
+            await self.page.fill("textarea[name='software[description]']", description)
+
+        # Add tech stack
+        if built_with:
+            tech_input = self.page.locator("input[placeholder*='technology'], input[name*='built_with']").first
+            for tech in built_with:
+                await tech_input.fill(tech)
+                await tech_input.press("Enter")
+
+        # Add links
+        if links:
+            if links.get("github"):
+                await self.page.fill("input[name*='github'], input[placeholder*='github']", links["github"])
+            if links.get("demo"):
+                await self.page.fill("input[name*='demo'], input[placeholder*='demo']", links["demo"])
+
+        # Submit form
+        await self.page.click("input[type='submit']")
+        await self.page.wait_for_load_state("networkidle")
+
+        # Check for success
+        current_url = self.page.url
+        if "/software/" in current_url:
+            return {
+                "success": True,
+                "url": current_url,
+                "title": title,
+            }
+        else:
+            # Check for errors
+            errors = await self.page.locator(".error, .alert-error").all_text_contents()
+            raise Exception(f"Submission failed: {errors}")
+
+    async def list_my_submissions(self, limit: int = 20) -> list[dict]:
+        """List my submitted projects."""
+        await self._ensure_logged_in()
+
+        await self.page.goto("https://devpost.com/my-projects", wait_until="networkidle")
+
+        # Wait for projects to load
+        await self.page.wait_for_selector(".software-item, .project-card, .challenge-portfolio", timeout=10000)
+
+        # Extract project data
+        projects = await self.page.locator(".software-item, .project-card").all()
+
+        results = []
+        for project in projects[:limit]:
+            title_elem = await project.locator("h3, .title, .software-name").text_content()
+            link_elem = await project.locator("a").get_attribute("href")
+
+            results.append({
+                "title": title_elem.strip() if title_elem else "Unknown",
+                "url": f"https://devpost.com{link_elem}" if link_elem and link_elem.startswith("/") else link_elem,
+            })
+
+        return results
+
+    async def update_submission(
+        self,
+        project_url: str,
+        title: Optional[str] = None,
+        tagline: Optional[str] = None,
+        description: Optional[str] = None,
+        dry_run: bool = False,
+    ) -> dict:
+        """Update an existing submission."""
+        await self._ensure_logged_in()
+
+        if dry_run:
+            return {
+                "dry_run": True,
+                "project_url": project_url,
+                "updates": {
+                    "title": title,
+                    "tagline": tagline,
+                    "description": description,
+                },
+            }
+
+        # Navigate to project edit page
+        edit_url = f"{project_url.rstrip('/')}/edit"
+        await self.page.goto(edit_url, wait_until="networkidle")
+
+        # Update fields if provided
+        if title:
+            await self.page.fill("input[name='software[name]']", title)
+        if tagline:
+            await self.page.fill("input[name='software[tagline]']", tagline)
+        if description:
+            await self.page.fill("textarea[name='software[description]']", description)
+
+        # Save changes
+        await self.page.click("input[type='submit']")
+        await self.page.wait_for_load_state("networkidle")
+
+        return {
+            "success": True,
+            "project_url": project_url,
+            "updated_fields": [f for f in ["title", "tagline", "description"] if locals()[f]],
+        }
+
+    async def upload_screenshots(
+        self,
+        project_url: str,
+        image_paths: list[str],
+        set_main_image: Optional[int] = None,
+    ) -> dict:
+        """Upload screenshots to a project."""
+        await self._ensure_logged_in()
+
+        # Navigate to project gallery
+        gallery_url = f"{project_url.rstrip('/')}/gallery"
+        await self.page.goto(gallery_url, wait_until="networkidle")
+
+        uploaded = []
+        for i, path in enumerate(image_paths):
+            file_input = self.page.locator("input[type='file']").first
+            await file_input.set_input_files(path)
+            uploaded.append(path)
+
+        if set_main_image is not None and set_main_image < len(image_paths):
+            # Select main image
+            await self.page.click(f".image-item:nth-child({set_main_image + 1}) .set-main")
+
+        return {
+            "success": True,
+            "uploaded": uploaded,
+            "main_image": image_paths[set_main_image] if set_main_image is not None else None,
+        }
+
+
 # CLI Commands
 
 @click.group()
@@ -575,10 +810,179 @@ def search(query: str, limit: int, is_json: bool):
     asyncio.run(_search())
 
 
-# Placeholder commands for auth-required operations
+# Authenticated commands for managing Devpost submissions
+@cli.group()
+def submit():
+    """Submit and manage projects (requires DEVPOST_EMAIL and DEVPOST_PASSWORD env vars)."""
+    pass
+
+
+@submit.command(name="project")
+@click.argument("hackathon_slug")
+@click.option("--title", "-t", required=True, help="Project title")
+@click.option("--tagline", "-tag", required=True, help="Short description (max 140 chars)")
+@click.option("--description", "-d", help="Full project description (markdown)")
+@click.option("--built-with", "-b", help="Comma-separated list of technologies (e.g., 'Python,React,OpenAI')")
+@click.option("--github", help="GitHub repository URL")
+@click.option("--demo", help="Live demo URL")
+@click.option("--video", help="Demo video URL (YouTube, etc.)")
+@click.option("--dry-run", is_flag=True, help="Test without actually submitting")
+def submit_project_cmd(
+    hackathon_slug: str,
+    title: str,
+    tagline: str,
+    description: Optional[str],
+    built_with: Optional[str],
+    github: Optional[str],
+    demo: Optional[str],
+    video: Optional[str],
+    dry_run: bool,
+):
+    """Submit a new project to a hackathon."""
+    email = os.getenv("DEVPOST_EMAIL")
+    password = os.getenv("DEVPOST_PASSWORD")
+
+    if not email or not password:
+        console.print("[red]Error: DEVPOST_EMAIL and DEVPOST_PASSWORD env vars required[/red]")
+        console.print("Set them with: export DEVPOST_EMAIL='your@email.com'")
+        sys.exit(1)
+
+    async def _submit():
+        async with AuthenticatedDevpostClient(email, password) as client:
+            # Parse built_with
+            tech_list = [t.strip() for t in built_with.split(",")] if built_with else None
+
+            # Build links dict
+            links = {}
+            if github:
+                links["github"] = github
+            if demo:
+                links["demo"] = demo
+            if video:
+                links["video"] = video
+
+            result = await client.submit_project(
+                hackathon_slug=hackathon_slug,
+                title=title,
+                tagline=tagline,
+                description=description,
+                built_with=tech_list,
+                links=links if links else None,
+                dry_run=dry_run,
+            )
+
+            if dry_run:
+                console.print(Panel(
+                    f"[yellow]DRY RUN - Would submit:[/yellow]\n\n"
+                    f"Hackathon: {result['hackathon']}\n"
+                    f"Title: {result['title']}\n"
+                    f"Tagline: {result['tagline']}\n"
+                    f"Tech: {', '.join(result['built_with']) if result['built_with'] else 'None'}\n"
+                    f"Links: {result['links']}",
+                    title="Submission Preview",
+                    border_style="yellow"
+                ))
+            else:
+                console.print(Panel(
+                    f"[green]Successfully submitted![/green]\n\n"
+                    f"URL: {result['url']}\n"
+                    f"Title: {result['title']}",
+                    title="Submission Complete",
+                    border_style="green"
+                ))
+
+    asyncio.run(_submit())
+
+
+@cli.command()
+@click.option("--limit", "-l", default=20, help="Number of submissions to show")
+@click.option("--json", is_flag=True, help="Output as JSON")
+def my_submissions(limit: int, json: bool):
+    """List your submitted projects (requires authentication)."""
+    email = os.getenv("DEVPOST_EMAIL")
+    password = os.getenv("DEVPOST_PASSWORD")
+
+    if not email or not password:
+        console.print("[red]Error: DEVPOST_EMAIL and DEVPOST_PASSWORD env vars required[/red]")
+        sys.exit(1)
+
+    async def _list():
+        async with AuthenticatedDevpostClient(email, password) as client:
+            projects = await client.list_my_submissions(limit=limit)
+
+            if json:
+                click.echo(json.dumps(projects, indent=2))
+                return
+
+            if not projects:
+                console.print("[yellow]No submissions found.[/yellow]")
+                return
+
+            table = Table(title="Your Devpost Submissions")
+            table.add_column("Title", style="cyan")
+            table.add_column("URL", style="dim")
+
+            for p in projects:
+                table.add_row(p.get("title", "Unknown"), p.get("url", "N/A")[:60])
+
+            console.print(table)
+            console.print(f"\n[dim]Showing {len(projects)} submissions[/dim]")
+
+    asyncio.run(_list())
+
+
+@cli.command()
+@click.argument("project_url")
+@click.option("--title", "-t", help="New title")
+@click.option("--tagline", "-tag", help="New tagline")
+@click.option("--description", "-d", help="New description")
+@click.option("--dry-run", is_flag=True, help="Test without saving")
+def update(project_url: str, title: Optional[str], tagline: Optional[str], description: Optional[str], dry_run: bool):
+    """Update an existing submission (requires authentication)."""
+    email = os.getenv("DEVPOST_EMAIL")
+    password = os.getenv("DEVPOST_PASSWORD")
+
+    if not email or not password:
+        console.print("[red]Error: DEVPOST_EMAIL and DEVPOST_PASSWORD env vars required[/red]")
+        sys.exit(1)
+
+    if not any([title, tagline, description]):
+        console.print("[yellow]Warning: No fields to update specified. Use --title, --tagline, or --description.[/yellow]")
+        sys.exit(1)
+
+    async def _update():
+        async with AuthenticatedDevpostClient(email, password) as client:
+            result = await client.update_submission(
+                project_url=project_url,
+                title=title,
+                tagline=tagline,
+                description=description,
+                dry_run=dry_run,
+            )
+
+            if dry_run:
+                console.print(Panel(
+                    f"[yellow]DRY RUN - Would update:[/yellow]\n\n"
+                    f"Project: {result['project_url']}\n"
+                    f"Fields: {', '.join(result['updates'].keys())}",
+                    title="Update Preview",
+                    border_style="yellow"
+                ))
+            else:
+                console.print(Panel(
+                    f"[green]Successfully updated![/green]\n\n"
+                    f"Updated fields: {', '.join(result['updated_fields'])}",
+                    title="Update Complete",
+                    border_style="green"
+                ))
+
+    asyncio.run(_update())
+
+
+# Placeholder commands for auth status
 @cli.group()
 def auth():
-    """Authentication commands (for submissions)."""
+    """Authentication commands."""
     pass
 
 
@@ -588,25 +992,24 @@ def status():
     email = os.getenv("DEVPOST_EMAIL")
     if email:
         console.print(f"[green]Authenticated as:[/green] {email}")
+        console.print("[dim]DEVPOST_PASSWORD is set" if os.getenv("DEVPOST_PASSWORD") else "[red]DEVPOST_PASSWORD is NOT set[/red]")
     else:
-        console.print("[yellow]Not authenticated. Set DEVPOST_EMAIL and DEVPOST_PASSWORD env vars.[/yellow]")
+        console.print("[yellow]Not authenticated. Set env vars:[/yellow]")
+        console.print("  export DEVPOST_EMAIL='your@email.com'")
+        console.print("  export DEVPOST_PASSWORD='your_password'")
 
 
 @auth.command()
 def login():
-    """Set up authentication (interactive)."""
-    console.print("[yellow]Auth not yet implemented. Set env vars:[/yellow]")
+    """Show authentication setup instructions."""
+    console.print("[cyan]To authenticate, set these environment variables:[/cyan]\n")
     console.print("  export DEVPOST_EMAIL='your@email.com'")
-    console.print("  export DEVPOST_PASSWORD='***'")
+    console.print("  export DEVPOST_PASSWORD='your_password'\n")
+    console.print("[dim]Or add to ~/.bashrc, ~/.zshrc, or ~/.hermes/.env[/dim]")
 
 
 def main():
     """Entry point."""
-    try:
-        import re  # Ensure re is available
-        globals()["re"] = re
-    except ImportError:
-        pass
     cli()
 
 
