@@ -1,0 +1,10 @@
+README.md
+pyproject.toml
+src/devpost_mcp/__init__.py
+src/devpost_mcp/server.py
+src/devpost_mcp.egg-info/PKG-INFO
+src/devpost_mcp.egg-info/SOURCES.txt
+src/devpost_mcp.egg-info/dependency_links.txt
+src/devpost_mcp.egg-info/entry_points.txt
+src/devpost_mcp.egg-info/requires.txt
+src/devpost_mcp.egg-info/top_level.txt

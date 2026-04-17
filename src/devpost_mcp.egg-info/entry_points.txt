@@ -1,0 +1,2 @@
+[console_scripts]
+devpost-mcp = devpost_mcp.server:main
