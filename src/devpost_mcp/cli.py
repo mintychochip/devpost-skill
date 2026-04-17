@@ -280,10 +280,13 @@ def list(limit: int, state: Optional[str], sort: str, query: Optional[str], is_j
                 if ends and ends != "N/A":
                     ends = ends[:10]  # Just date part
 
+                # Strip HTML from prize
+                prize_clean = re.sub(r"<[^>]+>", "", str(prize)) if prize else "N/A"
+
                 table.add_row(
                     h.get("title", "Unknown")[:50],
                     status,
-                    str(prize) if prize else "N/A",
+                    prize_clean,
                     ends,
                 )
 
@@ -310,11 +313,12 @@ def info(slug: str, is_json: bool):
                 return
 
             # Pretty print
+            prize_clean = re.sub(r"<[^>]+>", "", str(hackathon.get('prize_amount', 'N/A')))
             console.print(Panel(
                 f"[bold cyan]{hackathon.get('title', 'Unknown')}[/bold cyan]\n\n"
                 f"[green]URL:[/green] {hackathon.get('url', 'N/A')}\n"
                 f"[green]Status:[/green] {hackathon.get('open_state', 'unknown')}\n"
-                f"[green]Prize:[/green] {hackathon.get('prize_amount', 'N/A')}\n"
+                f"[green]Prize:[/green] {prize_clean}\n"
                 f"[green]Submissions:[/green] {hackathon.get('submissions_count', 'N/A')}\n"
                 f"[green]Ends:[/green] {hackathon.get('submission_period_ends_at', 'N/A')[:10] if hackathon.get('submission_period_ends_at') else 'N/A'}\n\n"
                 f"{hackathon.get('tagline', 'No description')[:300]}",
@@ -456,8 +460,9 @@ def search(query: str, limit: int, is_json: bool):
             console.print(f"[green]Found {len(hackathons)} hackathons for '{query}':[/green]\n")
 
             for h in hackathons:
+                tagline = h.get('tagline') or 'No description'
                 console.print(f"[cyan]{h.get('title', 'Unknown')}[/cyan] - {h.get('open_state', 'unknown')}")
-                console.print(f"  [dim]{h.get('tagline', 'No description')[:100]}[/dim]\n")
+                console.print(f"  [dim]{tagline[:100]}[/dim]\n")
 
     asyncio.run(_search())
 
