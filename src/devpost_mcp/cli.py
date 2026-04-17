@@ -15,6 +15,14 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.syntax import Syntax
+from rich import print as rprint
+
+# Optional Playwright import
+try:
+    from playwright.async_api import async_playwright
+    HAS_PLAYWRIGHT = True
+except ImportError:
+    HAS_PLAYWRIGHT = False
 
 console = Console()
 
@@ -80,21 +88,36 @@ class DevpostClient:
         hackathons = data.get("hackathons", [])
         return hackathons[0] if hackathons else None
 
-    async def scrape_hackathon_page(self, url: str) -> dict:
-        """Deep scrape any hackathon page by URL."""
-        resp = await self.client.get(url)
-        resp.raise_for_status()
+    async def scrape_hackathon_page(self, url: str, use_browser: bool = True) -> dict:
+        """Deep scrape any hackathon page by URL. Uses browser automation if HTTP fails."""
+        # Try HTTP first, fall back to browser
+        html = await self._fetch_with_fallback(url, use_browser)
+        if not html:
+            raise Exception(f"Failed to fetch {url} - both HTTP and browser methods failed")
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = BeautifulSoup(html, "html.parser")
 
-        # Extract basic info
-        title = (
-            self._get_meta(soup, "og:title")
-            or soup.find("h1").get_text(strip=True) if soup.find("h1") else None
-        )
+        # Extract basic info - try multiple selectors
+        title = None
+        # Try meta tag first
+        title = self._get_meta(soup, "og:title") or self._get_meta(soup, "twitter:title")
+        # Try h1
+        if not title:
+            h1 = soup.find("h1")
+            if h1:
+                title = h1.get_text(strip=True)
+        # Try title tag
+        if not title:
+            title_tag = soup.find("title")
+            if title_tag:
+                title = title_tag.get_text(strip=True).replace(" - Devpost", "")
+        if not title:
+            title = "Unknown"
+
         description = (
             self._get_meta(soup, "og:description")
             or self._get_meta(soup, "description")
+            or self._get_meta(soup, "twitter:description")
             or ""
         )
         image = self._get_meta(soup, "og:image")
@@ -102,13 +125,12 @@ class DevpostClient:
         # Extract dates, prizes, stats from page content
         body_text = soup.get_text()
 
-        # Look for prize amounts
+        # Look for prize amounts in the page text
         prize_text = None
-        prize_section = soup.find(string=re.compile(r"\$[\d,]+|prize|awards", re.I))
-        if prize_section:
-            parent = prize_section.find_parent(["div", "section", "p"])
-            if parent:
-                prize_text = parent.get_text(strip=True)
+        # Look for prize amounts with $ sign
+        prize_matches = re.findall(r"\$[\d,]+(?:\.\d{2})?", body_text)
+        if prize_matches:
+            prize_text = f"Prizes: {', '.join(prize_matches[:3])}"
 
         # Try to find gallery and rules links
         gallery_url = f"{url.rstrip('/')}/project-gallery"
@@ -116,10 +138,17 @@ class DevpostClient:
 
         # Look for submission count, participants, etc.
         stats = {}
-        for stat in soup.find_all(string=re.compile(r"(\d+)\s+(submissions?|participants?|developers?)", re.I)):
-            match = re.search(r"(\d+)\s+(\w+)", stat)
-            if match:
-                stats[match.group(2).lower()] = int(match.group(1))
+        # Look for patterns like "123 submissions" or "45 participants"
+        stat_patterns = [
+            (r"(\d+)\s+submissions?", "submissions"),
+            (r"(\d+)\s+participants?", "participants"),
+            (r"(\d+)\s+developers?", "developers"),
+        ]
+        for pattern, key in stat_patterns:
+            matches = re.findall(pattern, body_text, re.IGNORECASE)
+            if matches:
+                # Take the first/largest number found
+                stats[key] = max(int(m) for m in matches)
 
         return {
             "title": title,
@@ -130,22 +159,100 @@ class DevpostClient:
             "rules_url": rules_url,
             "prize_summary": prize_text,
             "stats": stats,
-            "raw_html_preview": resp.text[:1000] + "..." if len(resp.text) > 1000 else resp.text,
         }
+
+    async def _fetch_with_fallback(self, url: str, use_browser: bool = True) -> Optional[str]:
+        """Try HTTP first, fall back to Playwright browser if blocked."""
+        # Try HTTP first
+        try:
+            resp = await self.client.get(url)
+            if resp.status_code == 200:
+                return resp.text
+        except Exception:
+            pass
+
+        # Fall back to browser
+        if use_browser and HAS_PLAYWRIGHT:
+            console.print("[dim]HTTP blocked, using browser automation...[/dim]")
+            return await self._fetch_with_browser(url)
+
+        return None
+
+    async def _fetch_with_browser(self, url: str) -> Optional[str]:
+        """Use Playwright browser to fetch page content with stealth mode."""
+        if not HAS_PLAYWRIGHT:
+            return None
+
+        try:
+            async with async_playwright() as p:
+                # Launch with stealth args to avoid detection
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=[
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-web-security",
+                        "--disable-features=IsolateOrigins,site-per-process",
+                    ]
+                )
+
+                # Create context with realistic viewport and user agent
+                context = await browser.new_context(
+                    viewport={"width": 1920, "height": 1080},
+                    user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                )
+
+                page = await context.new_page()
+
+                # Set realistic browser headers
+                await page.set_extra_http_headers({
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                    "Referer": "https://devpost.com/hackathons",
+                })
+
+                # Inject script to hide automation
+                await page.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => undefined
+                    });
+                    Object.defineProperty(navigator, 'plugins', {
+                        get: () => [1, 2, 3, 4, 5]
+                    });
+                """)
+
+                await page.goto(url, wait_until="networkidle", timeout=30000)
+                # Wait for content to render and scroll down to trigger lazy loading
+                await asyncio.sleep(3)
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await asyncio.sleep(1)
+                # Wait for specific content to appear
+                try:
+                    await page.wait_for_selector("h1, .hackathon-title, [data-testid='hackathon-title']", timeout=5000)
+                except Exception:
+                    pass  # Continue even if selector not found
+                content = await page.content()
+                await context.close()
+                await browser.close()
+                return content
+        except Exception as e:
+            console.print(f"[red]Browser error: {e}[/red]")
+            return None
 
     async def list_hackathon_projects(
         self,
         hackathon_url: str,
         limit: int = 20,
         winners_only: bool = False,
+        use_browser: bool = True,
     ) -> list[dict]:
         """List projects from a hackathon's gallery."""
         gallery_url = f"{hackathon_url.rstrip('/')}/project-gallery"
 
-        resp = await self.client.get(gallery_url)
-        resp.raise_for_status()
+        html = await self._fetch_with_fallback(gallery_url, use_browser)
+        if not html:
+            raise Exception(f"Failed to fetch gallery at {gallery_url}")
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = BeautifulSoup(html, "html.parser")
         projects = []
 
         # Find project entries - they usually have specific class patterns
@@ -172,12 +279,13 @@ class DevpostClient:
 
         return projects
 
-    async def get_project_details(self, project_url: str) -> dict:
+    async def get_project_details(self, project_url: str, use_browser: bool = True) -> dict:
         """Get detailed info about a specific project."""
-        resp = await self.client.get(project_url)
-        resp.raise_for_status()
+        html = await self._fetch_with_fallback(project_url, use_browser)
+        if not html:
+            raise Exception(f"Failed to fetch project at {project_url}")
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = BeautifulSoup(html, "html.parser")
 
         # Extract title
         title = (
