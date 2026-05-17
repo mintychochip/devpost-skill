@@ -1,2 +1,2 @@
 [console_scripts]
-devpost = devpost_mcp.cli:main
+devpost = devpost_cli.cli:main

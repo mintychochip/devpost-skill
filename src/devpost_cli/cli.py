@@ -59,7 +59,7 @@ def _run_async(coro):
 
 
 @click.group()
-@click.version_option(version="0.2.0", prog_name="devpost")
+@click.version_option(version="0.3.0", prog_name="devpost")
 @click.option("--headed", is_flag=True, help="Run browser in headed mode (visible window) for debugging")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
 def cli(headed: bool, verbose: bool):
@@ -83,7 +83,7 @@ def cli(headed: bool, verbose: bool):
     setup_logging(verbose)
 
 
-@cli.command()
+@cli.command(name="hackathons")
 @click.option("--limit", "-l", default=20, help="Number of hackathons to show (default: 20)")
 @click.option("--state", "-s", type=click.Choice(["open", "closed", "ended", "upcoming", "judging", "submitting"]),
               help="Filter by hackathon state ('closed' is an alias for 'ended')")
@@ -91,17 +91,19 @@ def cli(headed: bool, verbose: bool):
               default="recently-added", help="Sort order (default: recently-added)")
 @click.option("--query", "-q", help="Search query string")
 @click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
-def list(limit: int, state: Optional[str], sort: str, query: Optional[str], is_json: Optional[bool]):
+def hackathons(limit: int, state: Optional[str], sort: str, query: Optional[str], is_json: Optional[bool]):
     """List hackathons on Devpost.
     
     \b
     Examples:
-      devpost list                         # Top 20 recently-added hackathons
-      devpost list --state open            # Only open hackathons
-      devpost list -s closed --limit 5     # 5 closed hackathons (for scouting)
-      devpost list --sort prize-amount     # Sort by prize amount
-      devpost list -q "AI" --limit 10      # Search for AI hackathons
-      devpost list --json                  # Output as JSON
+      devpost hackathons                   # Top 20 recently-added hackathons
+      devpost hackathons --state open      # Only open hackathons
+      devpost hackathons -s closed -l 5    # 5 closed hackathons (for scouting)
+      devpost hackathons --sort prize-amount
+      devpost hackathons -q "AI" -l 10     # Search for AI hackathons
+      devpost hackathons --json            # Output as JSON
+    
+    Hidden alias: devpost list (deprecated)
     """
     async def _list():
         async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
@@ -142,20 +144,73 @@ def list(limit: int, state: Optional[str], sort: str, query: Optional[str], is_j
     _run_async(_list())
 
 
+@cli.command(name="list", hidden=True)
+@click.option("--limit", "-l", default=20, help="Number of hackathons to show (default: 20)")
+@click.option("--state", "-s", type=click.Choice(["open", "closed", "ended", "upcoming", "judging", "submitting"]),
+              help="Filter by hackathon state ('closed' is an alias for 'ended')")
+@click.option("--sort", type=click.Choice(["recently-added", "submission-deadline", "prize-amount", "popularity"]),
+              default="recently-added", help="Sort order (default: recently-added)")
+@click.option("--query", "-q", help="Search query string")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
+def list_cmd(limit: int, state: Optional[str], sort: str, query: Optional[str], is_json: Optional[bool]):
+    """Legacy alias for hackathons command (deprecated)."""
+    _run_async(_list_cmd(limit, state, sort, query, is_json))
+
+
+async def _list_cmd(limit: int, state: Optional[str], sort: str, query: Optional[str], is_json: Optional[bool]):
+    """Internal list command logic (legacy alias)."""
+    async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+        hackathons_list = await client.list_hackathons(
+            limit=limit,
+            open_state=state,
+            sort_by=sort,
+            query=query,
+        )
+
+        if output_json(hackathons_list, is_json):
+            return
+
+        if not hackathons_list:
+            console.print("[yellow]No hackathons found.[/yellow]")
+            return
+
+        table = Table(title="Hackathons on Devpost")
+        table.add_column("Title", style="cyan", no_wrap=True)
+        table.add_column("Status", style="green")
+        table.add_column("Prize", style="yellow")
+        table.add_column("Ends", style="magenta")
+
+        for h in hackathons_list:
+            status = h.get("open_state", "unknown")
+            prize = h.get("prize_amount", "N/A")
+            ends = h.get("ends_at", "N/A")
+
+            table.add_row(
+                h.get("title", "Unknown")[:50],
+                status,
+                prize if prize else "N/A",
+                ends if ends else "N/A",
+            )
+
+        console.print(table)
+
+
 @cli.command()
 @click.argument("slug")
 @click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
-def info(slug: str, is_json: Optional[bool]):
+def overview(slug: str, is_json: Optional[bool]):
     """Get hackathon details by URL slug.
     
     The slug is the subdomain from the hackathon URL.
     
     \b
     Examples:
-      devpost info zervehack             # zervehack.devpost.com
-      devpost info datahacks-2025        # datahacks-2025.devpost.com
-      devpost info agents-assemble       # agents-assemble.devpost.com
-      devpost info myhackathon --json    # Output as JSON
+      devpost overview zervehack         # zervehack.devpost.com
+      devpost overview datahacks-2025    # datahacks-2025.devpost.com
+      devpost overview agents-assemble   # agents-assemble.devpost.com
+      devpost overview myhackathon --json
+    
+    Hidden alias: devpost info (deprecated)
     """
     async def _info():
         async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
@@ -183,6 +238,41 @@ def info(slug: str, is_json: Optional[bool]):
             ))
 
     _run_async(_info())
+
+
+@cli.command(name="info", hidden=True)
+@click.argument("slug")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
+def info_cmd(slug: str, is_json: Optional[bool]):
+    """Legacy alias for overview command (deprecated)."""
+    _run_async(_info_cmd(slug, is_json))
+
+
+async def _info_cmd(slug: str, is_json: Optional[bool]):
+    """Internal info command logic (legacy alias)."""
+    async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+        hackathon = await client.get_hackathon_by_slug(slug)
+
+        if not hackathon:
+            if output_json({"error": f"Hackathon '{slug}' not found", "code": "NOT_FOUND"}, is_json):
+                sys.exit(3)
+            console.print(f"[red]Hackathon '{slug}' not found.[/red]")
+            sys.exit(3)
+
+        if output_json(hackathon, is_json):
+            return
+
+        console.print(Panel(
+            f"[bold cyan]{hackathon.get('title', 'Unknown')}[/bold cyan]\n\n"
+            f"[green]URL:[/green] {hackathon.get('url', 'N/A')}\n"
+            f"[green]Status:[/green] {hackathon.get('open_state', 'unknown')}\n"
+            f"[green]Prize:[/green] {hackathon.get('prize_amount', 'N/A')}\n"
+            f"[green]Submissions:[/green] {hackathon.get('submissions_count', 'N/A')}\n"
+            f"[green]Ends:[/green] {hackathon.get('ends_at', 'N/A')}\n\n"
+            f"{hackathon.get('tagline', 'No description')[:300]}",
+            title="Hackathon Details",
+            border_style="blue"
+        ))
 
 
 @cli.command()
@@ -230,12 +320,12 @@ def scrape(url: str, is_json: bool, output: Optional[str]):
     _run_async(_scrape())
 
 
-@cli.command()
-@click.argument("url")
+@cli.command(name="gallery")
+@click.argument("slug")
 @click.option("--limit", "-l", default=20, help="Number of projects to show (default: 20)")
 @click.option("--winners", "-w", is_flag=True, help="Only show winning projects")
 @click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
-def projects(url: str, limit: int, winners: bool, is_json: Optional[bool]):
+def gallery(slug: str, limit: int, winners: bool, is_json: Optional[bool]):
     """List projects from a hackathon's project gallery.
     
     Works for active AND closed/past hackathons. Scrapes the gallery page
@@ -243,14 +333,17 @@ def projects(url: str, limit: int, winners: bool, is_json: Optional[bool]):
     
     \b
     Examples:
-      devpost projects https://datahacks-2025.devpost.com/
-      devpost projects https://hack.devpost.com/ --winners
-      devpost projects https://hack.devpost.com/ -l 50 --json
+      devpost gallery datahacks-2025     # datahacks-2025.devpost.com
+      devpost gallery hack --winners     # Only winners
+      devpost gallery hack -l 50 --json
+    
+    Hidden alias: devpost projects <url> (deprecated)
     """
-    async def _projects():
+    async def _gallery():
+        hackathon_url = f"https://{slug}.devpost.com/"
         async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
             result = await client.list_hackathon_projects(
-                hackathon_url=url,
+                hackathon_url=hackathon_url,
                 limit=limit,
                 winners_only=winners,
             )
@@ -262,7 +355,7 @@ def projects(url: str, limit: int, winners: bool, is_json: Optional[bool]):
                 console.print("[yellow]No projects found.[/yellow]")
                 return
 
-            table = Table(title=f"Projects from {url}")
+            table = Table(title=f"Gallery: {slug}")
             table.add_column("Title", style="cyan")
             table.add_column("Winner", style="yellow")
             table.add_column("URL", style="dim")
@@ -277,7 +370,54 @@ def projects(url: str, limit: int, winners: bool, is_json: Optional[bool]):
             console.print(table)
             console.print(f"\n[dim]Showing {len(result['projects'])} projects[/dim]")
 
-    _run_async(_projects())
+    _run_async(_gallery())
+
+
+@cli.command(name="projects", hidden=True)
+@click.argument("url")
+@click.option("--limit", "-l", default=20, help="Number of projects to show (default: 20)")
+@click.option("--winners", "-w", is_flag=True, help="Only show winning projects")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
+def projects_cmd(url: str, limit: int, winners: bool, is_json: Optional[bool]):
+    """Legacy alias for gallery command (deprecated)."""
+    if url.startswith("http"):
+        slug = url.rstrip("/").rsplit("/", maxsplit=1)[-1].replace(".devpost.com", "").replace("https://", "")
+    else:
+        slug = url
+    _run_async(_projects_cmd(slug, limit, winners, is_json))
+
+
+async def _projects_cmd(slug: str, limit: int, winners: bool, is_json: Optional[bool]):
+    """Internal projects command logic (legacy alias)."""
+    hackathon_url = f"https://{slug}.devpost.com/"
+    async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+        result = await client.list_hackathon_projects(
+            hackathon_url=hackathon_url,
+            limit=limit,
+            winners_only=winners,
+        )
+
+        if output_json(result, is_json):
+            return
+
+        if not result.get("projects"):
+            console.print("[yellow]No projects found.[/yellow]")
+            return
+
+        table = Table(title=f"Projects from {url}")
+        table.add_column("Title", style="cyan")
+        table.add_column("Winner", style="yellow")
+        table.add_column("URL", style="dim")
+
+        for p in result["projects"]:
+            table.add_row(
+                p.get("title", "Unknown")[:50],
+                "★ YES" if p.get("is_winner") else "No",
+                p.get("url", "N/A")[:60],
+            )
+
+        console.print(table)
+        console.print(f"\n[dim]Showing {len(result['projects'])} projects[/dim]")
 
 
 @cli.command()
@@ -551,55 +691,40 @@ def evaluate(slug: str, skills: Optional[str], is_json: Optional[bool], no_cache
 
 @cli.command()
 @click.argument("query")
-@click.option("--in", "hackathon", help="Search within a specific hackathon (slug or URL)")
-@click.option("--limit", "-l", default=10, help="Number of results (default: 10)")
-@click.option("--min-prize", type=int, help="Minimum prize amount in dollars (e.g. 10000)")
-@click.option("--closing-within", type=int, help="Only hackathons closing within N days")
-@click.option("--theme", help="Filter by theme name (e.g. 'Machine Learning')")
-@click.option("--featured", is_flag=True, help="Featured hackathons only")
-@click.option("--online", is_flag=True, help="Online hackathons only")
-@click.option("--deep", is_flag=True, help="Search across cached descriptions/rules/projects too")
+@click.option("--in", "hackathon", help="Search within a specific hackathon (slug)")
+@click.option("--limit", "-l", default=20, help="Number of results (default: 20)")
 @click.option("--winners", is_flag=True, help="In-hackathon: search only winning projects")
 @click.option("--tech", is_flag=True, help="In-hackathon: search only tech stacks")
 @click.option("--include-rules", is_flag=True, help="In-hackathon: also search hackathon description and rules")
-@click.option("--no-cache", is_flag=True, help="Bypass cache, fetch fresh data from API")
+@click.option("--no-cache", is_flag=True, help="Bypass cache, fetch fresh data")
 @click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
 def search(
     query: str,
     hackathon: Optional[str],
     limit: int,
-    min_prize: Optional[int],
-    closing_within: Optional[int],
-    theme: Optional[str],
-    featured: bool,
-    online: bool,
-    deep: bool,
     winners: bool,
     tech: bool,
     include_rules: bool,
     no_cache: bool,
     is_json: Optional[bool],
 ):
-    """Search hackathons or search within a hackathon.
+    """Search projects on Devpost (matches /software/search).
     
-    With one argument, searches across all hackathons (global search).
-    With two arguments, searches within a specific hackathon.
+    With --in flag, searches within a specific hackathon's projects.
     
     \b
-    Global search:
-      devpost search "AI"                          # Search hackathons
-      devpost search "AI" --min-prize 10000        # Filter by minimum prize
-      devpost search "AI" --closing-within 7        # Closing within 7 days
-      devpost search "AI" --theme "Machine Learning"
-      devpost search "AI" --featured               # Featured only
-      devpost search "AI" --deep                   # Search cached descriptions too
+    Global project search:
+      devpost search "AI"                          # Search projects
+      devpost search "chatbot" -l 30               # More results
     
     \b
     In-hackathon search:
-      devpost search "RAG" --in medo               # Search projects in MeDo hackathon
-      devpost search "agent" --in medo --winners   # Search only winning projects
+      devpost search "RAG" --in medo               # Search projects in MeDo
+      devpost search "agent" --in medo --winners   # Only winners
       devpost search "OpenAI" --in medo --tech     # Search tech stacks
       devpost search "requirement" --in medo --include-rules
+    
+    For hackathon search, use: devpost hackathons --query "AI"
     """
     use_cache = not no_cache
 
@@ -609,82 +734,38 @@ def search(
             use_cache, is_json,
         )
     else:
-        _search_global(
-            query, limit, min_prize, closing_within, theme,
-            featured, online, deep, use_cache, is_json,
-        )
+        _search_projects_global(query, limit, use_cache, is_json)
 
 
-def _search_global(
+def _search_projects_global(
     query: str,
     limit: int,
-    min_prize: Optional[int],
-    closing_within: Optional[int],
-    theme: Optional[str],
-    featured: bool,
-    online: bool,
-    deep: bool,
     use_cache: bool,
     is_json: Optional[bool],
 ):
     async def _run():
         async with DevpostClient(headed=_cli_config.get("headed", False), use_cache=use_cache) as client:
-            hackathons = await client.list_hackathons(query=query, limit=200 if (min_prize or closing_within or theme or featured or online) else limit)
+            projects = await client.search_projects(query=query, limit=limit)
 
-            if min_prize is not None:
-                hackathons = [h for h in hackathons if (parse_prize_amount(h.get("prize_amount")) or 0) >= min_prize]
-
-            if closing_within is not None:
-                filtered = []
-                for h in hackathons:
-                    days = parse_days_left(h.get("ends_at"))
-                    if days is not None and days <= closing_within:
-                        filtered.append(h)
-                hackathons = filtered
-
-            if theme:
-                theme_lower = theme.lower()
-                hackathons = [h for h in hackathons if any(
-                    t.get("name", "").lower() == theme_lower
-                    for t in h.get("themes", [])
-                )]
-
-            if featured:
-                hackathons = [h for h in hackathons if h.get("featured")]
-
-            if online:
-                hackathons = [h for h in hackathons if h.get("displayed_location", {}).get("icon") == "globe"]
-
-            hackathons = hackathons[:limit]
-
-            if deep and use_cache:
-                cache = CacheManager()
-                extra = cache.search(query)
-                deep_hackathon_slugs = set()
-                for entry in extra:
-                    data = entry.get("data")
-                    if isinstance(data, dict) and data.get("title"):
-                        slug = data.get("url", "").rsplit("/", maxsplit=1)[-1] or data.get("analytics_identifier", "")
-                        if slug and slug not in {h.get("url", "").rsplit("/", maxsplit=2)[-2] for h in hackathons}:
-                            deep_hackathon_slugs.add(slug)
-
-            if output_json(hackathons, is_json):
+            if output_json(projects, is_json):
                 return
 
-            if not hackathons:
-                console.print(f"[yellow]No hackathons found for '{query}'[/yellow]")
+            if not projects:
+                console.print(f"[yellow]No projects found for '{query}'[/yellow]")
                 return
 
-            console.print(f"[green]Found {len(hackathons)} hackathons for '{query}':[/green]\n")
+            console.print(f"[green]Found {len(projects)} projects for '{query}':[/green]\n")
 
-            for h in hackathons:
-                tagline = h.get('tagline') or 'No description'
-                prize = h.get('prize_amount') or 'N/A'
-                ends = h.get('ends_at') or ''
-                console.print(f"[cyan]{h.get('title', 'Unknown')}[/cyan] - {h.get('open_state', 'unknown')}")
-                console.print(f"  [dim]{tagline[:100]}[/dim]")
-                if prize != 'N/A':
-                    console.print(f"  [yellow]Prize: {prize}[/yellow]  [magenta]Ends: {ends}[/magenta]")
+            for p in projects:
+                title = p.get('title', 'Unknown')
+                tagline = p.get('tagline') or ''
+                winner_badge = " [yellow]★ WINNER[/yellow]" if p.get("is_winner") else ""
+                console.print(f"[cyan]{title}{winner_badge}[/cyan]")
+                if tagline:
+                    console.print(f"  [dim]{tagline[:100]}[/dim]")
+                if p.get("built_with"):
+                    console.print(f"  [dim]Built with: {', '.join(p['built_with'][:5])}[/dim]")
+                console.print(f"  [dim]{p.get('url', '')}[/dim]")
                 console.print("")
 
     _run_async(_run())
@@ -750,6 +831,330 @@ def _search_in_hackathon(
                 console.print(f"[bold]In rules ({len(rules_matches)}):[/bold]")
                 for m in rules_matches:
                     console.print(f"  [dim]...{m.get('snippet', '')}...[/dim]")
+                console.print("")
+
+    _run_async(_run())
+
+
+@cli.command()
+@click.argument("slug")
+@click.option("--limit", "-l", default=50, help="Number of participants to show (default: 50)")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
+def participants(slug: str, limit: int, is_json: Optional[bool]):
+    """List participants from a hackathon.
+    
+    \b
+    Examples:
+      devpost participants medo               # List MeDo participants
+      devpost participants hack --limit 100
+      devpost participants hack --json
+    """
+    async def _participants():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            result = await client.get_participants(slug, limit=limit)
+
+            if output_json(result, is_json):
+                return
+
+            if result.get("error"):
+                console.print(f"[red]Error: {result['error']}[/red]")
+                sys.exit(1)
+
+            if not result.get("participants"):
+                console.print("[yellow]No participants found.[/yellow]")
+                return
+
+            table = Table(title=f"Participants: {slug}")
+            table.add_column("Username", style="cyan")
+            table.add_column("Name", style="green")
+            table.add_column("URL", style="dim")
+
+            for p in result["participants"]:
+                table.add_row(
+                    p.get("username", "Unknown")[:30],
+                    p.get("name", "")[:30],
+                    p.get("url", "")[:50],
+                )
+
+            console.print(table)
+            console.print(f"\n[dim]Showing {result['count']} participants[/dim]")
+
+    _run_async(_participants())
+
+
+@cli.command()
+@click.argument("slug")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
+def resources(slug: str, is_json: Optional[bool]):
+    """List resources from a hackathon.
+    
+    \b
+    Examples:
+      devpost resources medo                  # List MeDo resources
+      devpost resources hack --json
+    """
+    async def _resources():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            result = await client.get_resources(slug)
+
+            if output_json(result, is_json):
+                return
+
+            if result.get("error"):
+                console.print(f"[red]Error: {result['error']}[/red]")
+                sys.exit(1)
+
+            if not result.get("resources"):
+                console.print("[yellow]No resources found.[/yellow]")
+                return
+
+            table = Table(title=f"Resources: {slug}")
+            table.add_column("Title", style="cyan")
+            table.add_column("URL", style="dim")
+
+            for r in result["resources"]:
+                table.add_row(
+                    r.get("title", "Unknown")[:50],
+                    r.get("url", "")[:60],
+                )
+
+            console.print(table)
+            console.print(f"\n[dim]Showing {len(result['resources'])} resources[/dim]")
+
+    _run_async(_resources())
+
+
+@cli.command()
+@click.argument("slug")
+@click.option("--limit", "-l", default=20, help="Number of updates to show (default: 20)")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
+def updates(slug: str, limit: int, is_json: Optional[bool]):
+    """List updates from a hackathon.
+    
+    \b
+    Examples:
+      devpost updates medo                    # List MeDo updates
+      devpost updates hack --limit 50
+      devpost updates hack --json
+    """
+    async def _updates():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            result = await client.get_updates(slug, limit=limit)
+
+            if output_json(result, is_json):
+                return
+
+            if result.get("error"):
+                console.print(f"[red]Error: {result['error']}[/red]")
+                sys.exit(1)
+
+            if not result.get("updates"):
+                console.print("[yellow]No updates found.[/yellow]")
+                return
+
+            for u in result["updates"]:
+                console.print(f"[cyan]{u.get('title', 'Untitled')}[/cyan]")
+                if u.get("date"):
+                    console.print(f"  [dim]{u['date']}[/dim]")
+                if u.get("content"):
+                    console.print(f"  [dim]{u['content'][:200]}[/dim]")
+                if u.get("url"):
+                    console.print(f"  [dim]{u['url']}[/dim]")
+                console.print("")
+
+            console.print(f"[dim]Showing {result['count']} updates[/dim]")
+
+    _run_async(_updates())
+
+
+@cli.command()
+@click.argument("slug")
+@click.option("--limit", "-l", default=20, help="Number of discussions to show (default: 20)")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
+def discussions(slug: str, limit: int, is_json: Optional[bool]):
+    """List discussions/forum topics from a hackathon.
+    
+    \b
+    Examples:
+      devpost discussions medo                # List MeDo discussions
+      devpost discussions hack --limit 50
+      devpost discussions hack --json
+    """
+    async def _discussions():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            result = await client.get_discussions(slug, limit=limit)
+
+            if output_json(result, is_json):
+                return
+
+            if result.get("error"):
+                console.print(f"[red]Error: {result['error']}[/red]")
+                sys.exit(1)
+
+            if not result.get("discussions"):
+                console.print("[yellow]No discussions found.[/yellow]")
+                return
+
+            table = Table(title=f"Discussions: {slug}")
+            table.add_column("Title", style="cyan")
+            table.add_column("Author", style="green")
+            table.add_column("Replies", style="yellow")
+            table.add_column("Date", style="dim")
+
+            for d in result["discussions"]:
+                table.add_row(
+                    d.get("title", "Untitled")[:40],
+                    d.get("author", "")[:20] or "N/A",
+                    d.get("replies", "")[:10] or "0",
+                    d.get("date", "")[:15] or "N/A",
+                )
+
+            console.print(table)
+            console.print(f"\n[dim]Showing {result['count']} discussions[/dim]")
+
+    _run_async(_discussions())
+
+
+@cli.group()
+def projects():
+    """Browse projects on Devpost.
+    
+    \b
+    Examples:
+      devpost projects search "AI"           # Search projects
+      devpost projects popular               # Popular projects
+      devpost projects built-with Python     # Projects using Python
+      devpost projects featured              # Staff picks
+    """
+    pass
+
+
+@projects.command()
+@click.argument("query")
+@click.option("--limit", "-l", default=20, help="Number of results (default: 20)")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def search(query: str, limit: int, is_json: Optional[bool]):
+    """Search projects by keyword."""
+    async def _run():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            projects = await client.search_projects(query=query, limit=limit)
+
+            if output_json(projects, is_json):
+                return
+
+            if not projects:
+                console.print(f"[yellow]No projects found for '{query}'[/yellow]")
+                return
+
+            for p in projects:
+                title = p.get('title', 'Unknown')
+                tagline = p.get('tagline') or ''
+                winner_badge = " [yellow]★ WINNER[/yellow]" if p.get("is_winner") else ""
+                console.print(f"[cyan]{title}{winner_badge}[/cyan]")
+                if tagline:
+                    console.print(f"  [dim]{tagline[:100]}[/dim]")
+                if p.get("built_with"):
+                    console.print(f"  [dim]Built with: {', '.join(p['built_with'][:5])}[/dim]")
+                console.print(f"  [dim]{p.get('url', '')}[/dim]")
+                console.print("")
+
+    _run_async(_run())
+
+
+@projects.command()
+@click.option("--limit", "-l", default=20, help="Number of results (default: 20)")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def popular(limit: int, is_json: Optional[bool]):
+    """List popular projects."""
+    async def _run():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            projects = await client.get_popular_projects(limit=limit)
+
+            if output_json(projects, is_json):
+                return
+
+            if not projects:
+                console.print("[yellow]No projects found.[/yellow]")
+                return
+
+            for p in projects:
+                title = p.get('title', 'Unknown')
+                tagline = p.get('tagline') or ''
+                console.print(f"[cyan]{title}[/cyan]")
+                if tagline:
+                    console.print(f"  [dim]{tagline[:100]}[/dim]")
+                if p.get("built_with"):
+                    console.print(f"  [dim]Built with: {', '.join(p['built_with'][:5])}[/dim]")
+                console.print(f"  [dim]{p.get('url', '')}[/dim]")
+                console.print("")
+
+    _run_async(_run())
+
+
+@projects.command(name="built-with")
+@click.argument("tech")
+@click.option("--limit", "-l", default=20, help="Number of results (default: 20)")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def built_with(tech: str, limit: int, is_json: Optional[bool]):
+    """List projects built with a specific technology.
+    
+    \b
+    Examples:
+      devpost projects built-with Python
+      devpost projects built-with "React"
+      devpost projects built-with "OpenAI"
+    """
+    async def _run():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            projects = await client.get_built_with_projects(tech=tech, limit=limit)
+
+            if output_json(projects, is_json):
+                return
+
+            if not projects:
+                console.print(f"[yellow]No projects found using '{tech}'[/yellow]")
+                return
+
+            for p in projects:
+                title = p.get('title', 'Unknown')
+                tagline = p.get('tagline') or ''
+                console.print(f"[cyan]{title}[/cyan]")
+                if tagline:
+                    console.print(f"  [dim]{tagline[:100]}[/dim]")
+                if p.get("built_with"):
+                    console.print(f"  [dim]Built with: {', '.join(p['built_with'][:5])}[/dim]")
+                console.print(f"  [dim]{p.get('url', '')}[/dim]")
+                console.print("")
+
+    _run_async(_run())
+
+
+@projects.command()
+@click.option("--limit", "-l", default=20, help="Number of results (default: 20)")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def featured(limit: int, is_json: Optional[bool]):
+    """List staff picks / featured projects."""
+    async def _run():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            projects = await client.get_featured_projects(limit=limit)
+
+            if output_json(projects, is_json):
+                return
+
+            if not projects:
+                console.print("[yellow]No featured projects found.[/yellow]")
+                return
+
+            for p in projects:
+                title = p.get('title', 'Unknown')
+                tagline = p.get('tagline') or ''
+                featured_badge = " [yellow]★ STAFF PICK[/yellow]" if p.get("is_featured") else ""
+                console.print(f"[cyan]{title}{featured_badge}[/cyan]")
+                if tagline:
+                    console.print(f"  [dim]{tagline[:100]}[/dim]")
+                if p.get("built_with"):
+                    console.print(f"  [dim]Built with: {', '.join(p['built_with'][:5])}[/dim]")
+                console.print(f"  [dim]{p.get('url', '')}[/dim]")
                 console.print("")
 
     _run_async(_run())

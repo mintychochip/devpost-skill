@@ -1,1 +1,1 @@
-devpost_mcp
+devpost_cli

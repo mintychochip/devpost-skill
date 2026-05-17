@@ -53,25 +53,25 @@ class TestCLILegacy:
         assert "Devpost CLI" in result.output
 
     def test_list_help(self):
-        """Test list command help."""
+        """Test list command help (legacy alias)."""
         runner = CliRunner()
         result = runner.invoke(cli, ["list", "--help"])
         assert result.exit_code == 0
-        assert "List hackathons" in result.output
+        assert "Legacy alias" in result.output
 
     def test_info_help(self):
-        """Test info command help."""
+        """Test info command help (legacy alias)."""
         runner = CliRunner()
         result = runner.invoke(cli, ["info", "--help"])
         assert result.exit_code == 0
-        assert "Get hackathon details" in result.output
+        assert "Legacy alias" in result.output
 
     def test_search_help(self):
-        """Test search command help."""
+        """Test search command help (now searches projects)."""
         runner = CliRunner()
         result = runner.invoke(cli, ["search", "--help"])
         assert result.exit_code == 0
-        assert "Search hackathons" in result.output
+        assert "Search projects" in result.output
 
     def test_auth_help(self):
         """Test auth commands help."""

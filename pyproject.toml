@@ -1,6 +1,6 @@
 [project]
 name = "devpost-cli"
-version = "0.2.0"
+version = "0.3.0"
 description = "CLI for browsing, searching, and submitting to Devpost hackathons"
 dependencies = [
     "click>=8.0.0",

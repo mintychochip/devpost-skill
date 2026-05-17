@@ -42,21 +42,26 @@ class TestCLIPublicCommands:
             assert "Test" in result.output
 
     def test_search(self, mock_devpost_api):
-        """Test search command."""
-        runner = CliRunner()
-        result = runner.invoke(cli, ["search", "AI", "--limit", "2"])
-        
-        assert result.exit_code == 0
+        """Test search command - now searches projects."""
+        with respx.mock:
+            respx.get("https://devpost.com/software/search").mock(
+                return_value=Response(200, text="<html><body><article class='software-entry'><a href='/software/test'><h2>Test Project</h2></a></article></body></html>")
+            )
+            
+            runner = CliRunner()
+            result = runner.invoke(cli, ["search", "AI", "--limit", "2"])
+            
+            assert result.exit_code == 0
 
-    def test_projects_winners_only(self, mock_gallery_html):
-        """Test projects --winners flag."""
+    def test_gallery_winners_only(self, mock_gallery_html):
+        """Test gallery --winners flag (formerly projects command)."""
         with respx.mock:
             respx.get("https://test.devpost.com/project-gallery").mock(
                 return_value=Response(200, text=mock_gallery_html)
             )
             
             runner = CliRunner()
-            result = runner.invoke(cli, ["projects", "https://test.devpost.com/", "--winners"])
+            result = runner.invoke(cli, ["gallery", "test", "--winners"])
             
             assert result.exit_code == 0
             assert "Project One" in result.output

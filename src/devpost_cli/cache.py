@@ -276,6 +276,39 @@ def make_evaluate_key(slug: str) -> str:
     return f"evaluate_{slug}"
 
 
+def make_search_projects_key(query: str, limit: int = 20) -> str:
+    return f"search_projects_{query}_{limit}"
+
+
+def make_popular_projects_key(limit: int = 20) -> str:
+    return f"popular_projects_{limit}"
+
+
+def make_built_with_key(tech: str, limit: int = 20) -> str:
+    tech_slug = tech.lower().replace(" ", "-").replace("+", "plus")
+    return f"built_with_{tech_slug}_{limit}"
+
+
+def make_featured_projects_key(limit: int = 20) -> str:
+    return f"featured_projects_{limit}"
+
+
+def make_participants_key(slug: str, limit: int = 50) -> str:
+    return f"participants_{slug}_{limit}"
+
+
+def make_resources_key(slug: str) -> str:
+    return f"resources_{slug}"
+
+
+def make_updates_key(slug: str, limit: int = 20) -> str:
+    return f"updates_{slug}_{limit}"
+
+
+def make_discussions_key(slug: str, limit: int = 20) -> str:
+    return f"discussions_{slug}_{limit}"
+
+
 def parse_days_left(text: Optional[str]) -> Optional[float]:
     if not text:
         return None

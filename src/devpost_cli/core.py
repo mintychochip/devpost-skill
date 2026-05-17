@@ -20,6 +20,14 @@ from .cache import (
     make_rules_key,
     make_scrape_key,
     make_evaluate_key,
+    make_search_projects_key,
+    make_popular_projects_key,
+    make_built_with_key,
+    make_featured_projects_key,
+    make_participants_key,
+    make_resources_key,
+    make_updates_key,
+    make_discussions_key,
     parse_days_left,
     parse_prize_amount,
 )
@@ -1387,6 +1395,497 @@ class DevpostClient:
             result["code"] = e.code
         except Exception as e:
             result["error"] = str(e)
+
+        return result
+
+    async def search_projects(
+        self,
+        query: str,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Search projects via /software/search."""
+        cache_key = make_search_projects_key(query, limit)
+        if self._cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        projects = []
+        page = 1
+        max_pages = (limit + 11) // 12
+
+        while page <= max_pages and len(projects) < limit:
+            try:
+                resp = await self._request_with_retry(
+                    "GET",
+                    f"{BASE_URL}/software/search",
+                    params={"q": query, "page": page},
+                )
+                soup = BeautifulSoup(resp.text, "html.parser")
+                project_cards = soup.find_all(class_=re.compile(r'software-entry|project-item|gallery-item', re.I))
+                if not project_cards:
+                    project_cards = soup.find_all("article")
+                if not project_cards:
+                    project_links = soup.find_all("a", href=re.compile(r'/software/'))
+                    seen = set()
+                    for link in project_links:
+                        href = link.get("href", "")
+                        if href in seen or not href:
+                            continue
+                        seen.add(href)
+                        card = link.find_parent(class_=re.compile(r'entry|card|item', re.I)) or link.parent
+                        proj = await _extract_project_from_card(card, link, self)
+                        if proj and proj not in projects:
+                            projects.append(proj)
+                else:
+                    for card in project_cards:
+                        try:
+                            link = card.find("a", href=re.compile(r'/software/'))
+                            if not link:
+                                continue
+                            href = link.get("href", "")
+                            if not href:
+                                continue
+                            proj = await _extract_project_from_card(card, link, self)
+                            if proj and proj not in projects:
+                                projects.append(proj)
+                        except Exception:
+                            continue
+            except DevpostError:
+                break
+            page += 1
+
+        projects = projects[:limit]
+        if self._cache:
+            self._cache.set(cache_key, projects)
+        return projects
+
+    async def get_popular_projects(self, limit: int = 20) -> list[dict]:
+        """Get popular projects from /software/popular."""
+        cache_key = make_popular_projects_key(limit)
+        if self._cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        projects = []
+        page = 1
+        max_pages = (limit + 11) // 12
+
+        while page <= max_pages and len(projects) < limit:
+            try:
+                resp = await self._request_with_retry(
+                    "GET",
+                    f"{BASE_URL}/software/popular",
+                    params={"page": page},
+                )
+                soup = BeautifulSoup(resp.text, "html.parser")
+                project_cards = soup.find_all(class_=re.compile(r'software-entry|project-item', re.I))
+                if not project_cards:
+                    project_cards = soup.find_all("article")
+                for card in project_cards:
+                    try:
+                        link = card.find("a", href=re.compile(r'/software/'))
+                        if not link:
+                            continue
+                        href = link.get("href", "")
+                        if not href:
+                            continue
+                        proj = await _extract_project_from_card(card, link, self)
+                        if proj and proj not in projects:
+                            projects.append(proj)
+                    except Exception:
+                        continue
+            except DevpostError:
+                break
+            page += 1
+
+        projects = projects[:limit]
+        if self._cache:
+            self._cache.set(cache_key, projects)
+        return projects
+
+    async def get_built_with_projects(
+        self,
+        tech: str,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Get projects built with a specific technology from /software/built-with/<tech>."""
+        cache_key = make_built_with_key(tech, limit)
+        if self._cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        tech_slug = tech.lower().replace(" ", "-").replace("+", "plus")
+        projects = []
+        page = 1
+        max_pages = (limit + 11) // 12
+
+        while page <= max_pages and len(projects) < limit:
+            try:
+                resp = await self._request_with_retry(
+                    "GET",
+                    f"{BASE_URL}/software/built-with/{tech_slug}",
+                    params={"page": page},
+                )
+                soup = BeautifulSoup(resp.text, "html.parser")
+                project_cards = soup.find_all(class_=re.compile(r'software-entry|project-item', re.I))
+                if not project_cards:
+                    project_cards = soup.find_all("article")
+                for card in project_cards:
+                    try:
+                        link = card.find("a", href=re.compile(r'/software/'))
+                        if not link:
+                            continue
+                        href = link.get("href", "")
+                        if not href:
+                            continue
+                        proj = await _extract_project_from_card(card, link, self)
+                        if proj:
+                            proj["built_with"] = proj.get("built_with", [])
+                            if tech.lower() not in [t.lower() for t in proj.get("built_with", [])]:
+                                proj["built_with"].append(tech)
+                            if proj not in projects:
+                                projects.append(proj)
+                    except Exception:
+                        continue
+            except DevpostError:
+                break
+            page += 1
+
+        projects = projects[:limit]
+        if self._cache:
+            self._cache.set(cache_key, projects)
+        return projects
+
+    async def get_featured_projects(self, limit: int = 20) -> list[dict]:
+        """Get staff picks/featured projects from /software."""
+        cache_key = make_featured_projects_key(limit)
+        if self._cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        projects = []
+        page = 1
+        max_pages = (limit + 11) // 12
+
+        while page <= max_pages and len(projects) < limit:
+            try:
+                resp = await self._request_with_retry(
+                    "GET",
+                    f"{BASE_URL}/software",
+                    params={"page": page},
+                )
+                soup = BeautifulSoup(resp.text, "html.parser")
+                project_cards = soup.find_all(class_=re.compile(r'software-entry|project-item|featured', re.I))
+                if not project_cards:
+                    project_cards = soup.find_all("article")
+                for card in project_cards:
+                    try:
+                        link = card.find("a", href=re.compile(r'/software/'))
+                        if not link:
+                            continue
+                        href = link.get("href", "")
+                        if not href:
+                            continue
+                        proj = await _extract_project_from_card(card, link, self)
+                        if proj:
+                            featured_badge = card.find(class_=re.compile(r'staff-pick|featured|pick', re.I))
+                            if featured_badge:
+                                proj["is_featured"] = True
+                            if proj not in projects:
+                                projects.append(proj)
+                    except Exception:
+                        continue
+            except DevpostError:
+                break
+            page += 1
+
+        projects = projects[:limit]
+        if self._cache:
+            self._cache.set(cache_key, projects)
+        return projects
+
+    async def get_participants(self, slug: str, limit: int = 50) -> dict[str, Any]:
+        """Get participants from /{slug}/participants."""
+        validate_slug(slug)
+        cache_key = make_participants_key(slug, limit)
+        if self._cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        participants_url = f"https://{slug}.devpost.com/participants"
+        result = {
+            "success": False,
+            "slug": slug,
+            "participants": [],
+            "count": 0,
+        }
+
+        try:
+            resp = await self._request_with_retry("GET", participants_url)
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            participant_cards = soup.find_all(class_=re.compile(r'participant|user-card|team-member', re.I))
+            if not participant_cards:
+                participant_cards = soup.find_all("a", href=re.compile(r'/users/'))
+
+            seen = set()
+            for card in participant_cards:
+                if len(seen) >= limit:
+                    break
+                try:
+                    if card.name == "a":
+                        href = card.get("href", "")
+                        username = href.replace("/users/", "").strip("/")
+                        if not username or username in seen:
+                            continue
+                        seen.add(username)
+                        name = card.get_text(strip=True)
+                        result["participants"].append({
+                            "username": username,
+                            "name": name if name else username,
+                            "url": f"{BASE_URL}/users/{username}",
+                        })
+                    else:
+                        link = card.find("a", href=re.compile(r'/users/'))
+                        if link:
+                            href = link.get("href", "")
+                            username = href.replace("/users/", "").strip("/")
+                            if not username or username in seen:
+                                continue
+                            seen.add(username)
+                            name = link.get_text(strip=True)
+                            result["participants"].append({
+                                "username": username,
+                                "name": name if name else username,
+                                "url": f"{BASE_URL}/users/{username}",
+                            })
+                except Exception:
+                    continue
+
+            result["count"] = len(result["participants"])
+            result["success"] = True
+
+        except DevpostError as e:
+            result["error"] = e.message
+            result["code"] = e.code
+        except Exception as e:
+            result["error"] = str(e)
+
+        if result["success"] and self._cache:
+            self._cache.set(cache_key, result)
+
+        return result
+
+    async def get_resources(self, slug: str) -> dict[str, Any]:
+        """Get resources from /{slug}/resources."""
+        validate_slug(slug)
+        cache_key = make_resources_key(slug)
+        if self._cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        resources_url = f"https://{slug}.devpost.com/resources"
+        result = {
+            "success": False,
+            "slug": slug,
+            "resources": [],
+        }
+
+        try:
+            resp = await self._request_with_retry("GET", resources_url)
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            resource_items = soup.find_all(class_=re.compile(r'resource|link-item|list-item', re.I))
+            if not resource_items:
+                resource_items = soup.find_all("li")
+            if not resource_items:
+                resource_links = soup.find_all("a", href=re.compile(r'^http'))
+
+            for item in resource_items:
+                try:
+                    if item.name == "a":
+                        title = item.get_text(strip=True)
+                        href = item.get("href", "")
+                        if title and href:
+                            result["resources"].append({
+                                "title": title,
+                                "url": href if href.startswith("http") else f"{BASE_URL}{href}",
+                            })
+                    else:
+                        link = item.find("a")
+                        if link:
+                            title = link.get_text(strip=True)
+                            href = link.get("href", "")
+                            if title and href:
+                                result["resources"].append({
+                                    "title": title,
+                                    "url": href if href.startswith("http") else f"{BASE_URL}{href}",
+                                })
+                except Exception:
+                    continue
+
+            result["success"] = True
+
+        except DevpostError as e:
+            result["error"] = e.message
+            result["code"] = e.code
+        except Exception as e:
+            result["error"] = str(e)
+
+        if result["success"] and self._cache:
+            self._cache.set(cache_key, result)
+
+        return result
+
+    async def get_updates(self, slug: str, limit: int = 20) -> dict[str, Any]:
+        """Get updates from /{slug}/updates."""
+        validate_slug(slug)
+        cache_key = make_updates_key(slug, limit)
+        if self._cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        updates_url = f"https://{slug}.devpost.com/updates"
+        result = {
+            "success": False,
+            "slug": slug,
+            "updates": [],
+            "count": 0,
+        }
+
+        try:
+            resp = await self._request_with_retry("GET", updates_url)
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            update_cards = soup.find_all(class_=re.compile(r'update|post|news-item', re.I))
+            if not update_cards:
+                update_cards = soup.find_all("article")
+
+            for card in update_cards:
+                if len(result["updates"]) >= limit:
+                    break
+                try:
+                    title_elem = card.find(["h2", "h3", "h4"]) or card.find(class_=re.compile(r'title|heading', re.I))
+                    title = title_elem.get_text(strip=True) if title_elem else "Untitled"
+
+                    date_elem = card.find(class_=re.compile(r'date|time|published', re.I))
+                    date = date_elem.get_text(strip=True) if date_elem else None
+
+                    content_elem = card.find(class_=re.compile(r'content|body|description|excerpt', re.I))
+                    content = content_elem.get_text(strip=True) if content_elem else None
+
+                    link_elem = card.find("a", href=re.compile(r'/updates/'))
+                    url = link_elem.get("href", "") if link_elem else None
+                    if url and not url.startswith("http"):
+                        url = f"{BASE_URL}{url}"
+
+                    result["updates"].append({
+                        "title": title,
+                        "date": date,
+                        "content": content,
+                        "url": url,
+                    })
+                except Exception:
+                    continue
+
+            result["count"] = len(result["updates"])
+            result["success"] = True
+
+        except DevpostError as e:
+            result["error"] = e.message
+            result["code"] = e.code
+        except Exception as e:
+            result["error"] = str(e)
+
+        if result["success"] and self._cache:
+            self._cache.set(cache_key, result)
+
+        return result
+
+    async def get_discussions(self, slug: str, limit: int = 20) -> dict[str, Any]:
+        """Get discussions/forum topics from /{slug}/forum_topics."""
+        validate_slug(slug)
+        cache_key = make_discussions_key(slug, limit)
+        if self._cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        discussions_url = f"https://{slug}.devpost.com/forum_topics"
+        result = {
+            "success": False,
+            "slug": slug,
+            "discussions": [],
+            "count": 0,
+        }
+
+        try:
+            resp = await self._request_with_retry("GET", discussions_url)
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            topic_rows = soup.find_all(class_=re.compile(r'topic|forum-item|discussion', re.I))
+            if not topic_rows:
+                topic_rows = soup.find_all("tr", class_=re.compile(r'topic', re.I))
+            if not topic_rows:
+                topic_links = soup.find_all("a", href=re.compile(r'/forum_topics/'))
+
+            for row in topic_rows:
+                if len(result["discussions"]) >= limit:
+                    break
+                try:
+                    if row.name == "a":
+                        title = row.get_text(strip=True)
+                        href = row.get("href", "")
+                        if title and href:
+                            result["discussions"].append({
+                                "title": title,
+                                "url": href if href.startswith("http") else f"{BASE_URL}{href}",
+                            })
+                    else:
+                        link = row.find("a", href=re.compile(r'/forum_topics/'))
+                        if link:
+                            title = link.get_text(strip=True)
+                            href = link.get("href", "")
+                            if not title or not href:
+                                continue
+
+                            author_elem = row.find(class_=re.compile(r'author|user', re.I))
+                            author = author_elem.get_text(strip=True) if author_elem else None
+
+                            replies_elem = row.find(class_=re.compile(r'replies|comments|responses', re.I))
+                            replies = replies_elem.get_text(strip=True) if replies_elem else None
+
+                            date_elem = row.find(class_=re.compile(r'date|time|ago', re.I))
+                            date = date_elem.get_text(strip=True) if date_elem else None
+
+                            result["discussions"].append({
+                                "title": title,
+                                "url": href if href.startswith("http") else f"{BASE_URL}{href}",
+                                "author": author,
+                                "replies": replies,
+                                "date": date,
+                            })
+                except Exception:
+                    continue
+
+            result["count"] = len(result["discussions"])
+            result["success"] = True
+
+        except DevpostError as e:
+            result["error"] = e.message
+            result["code"] = e.code
+        except Exception as e:
+            result["error"] = str(e)
+
+        if result["success"] and self._cache:
+            self._cache.set(cache_key, result)
 
         return result
 
