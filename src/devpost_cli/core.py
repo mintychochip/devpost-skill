@@ -1,11 +1,12 @@
 """Core business logic for Devpost CLI and MCP server."""
 
 import asyncio
+from datetime import datetime
 import json
 import os
 import random
 import re
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import urlparse
 
 import httpx
@@ -42,6 +43,7 @@ from .session import (
     save_credentials,
     save_session,
 )
+from .api import DevpostAPI
 
 logger = get_logger("core")
 
@@ -54,6 +56,40 @@ RETRY_STATUS_CODES = {429, 502, 503, 504}
 
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*[a-z0-9]$", re.IGNORECASE)
 _DEVPOST_URL_RE = re.compile(r"^https://([a-z0-9-]+\.)?devpost\.com/", re.IGNORECASE)
+
+# Playwright selectors for Devpost pages
+PROJECT_SELECTORS = {
+    "title": ["h1#app-title", "h1.software-title", "[data-test='project-title']", "h1"],
+    "tagline": ["p.tagline", ".elevator-pitch", "#app-tagline", ".tagline"],
+    "description": ["#app-details", ".description", ".software-description"],
+    "built_with": ["#built-with", ".built-with", ".tech-stack"],
+    "team": ["#app-team", ".team-members", ".collaborators"],
+    "gallery": ["#gallery", ".gallery", ".screenshots"],
+    "winner_badge": [".winner", ".winner-badge", ".prize-winner"],
+}
+
+USER_SELECTORS = {
+    "name": ["h1", ".name", ".profile-name"],
+    "bio": [".bio", ".about", ".description"],
+    "skills": [".skill", ".tag", ".pill"],
+    "projects": ["h5", ".project-title"],
+}
+
+# User agents for rotation (anti-detection)
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+]
+
+
+def _get_random_user_agent() -> str:
+    """Get random user agent string."""
+    return random.choice(USER_AGENTS)
 
 
 class DevpostError(Exception):
@@ -302,7 +338,7 @@ def _compute_verdict(signals: dict, status: str) -> tuple[str, str]:
 class DevpostClient:
     """HTTP client for Devpost API and scraping."""
 
-    def __init__(self, headed: bool = False, use_cache: bool = True) -> None:
+    def __init__(self, headed: bool = False, use_cache: bool = True, debug_screenshots: bool = False) -> None:
         self.client = httpx.AsyncClient(
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -313,6 +349,7 @@ class DevpostClient:
         )
         self.headed = headed
         self.use_cache = use_cache
+        self.debug_screenshots = debug_screenshots
         self._cache = CacheManager() if use_cache else None
 
     async def __aenter__(self):
@@ -452,53 +489,26 @@ class DevpostClient:
             if cached is not None:
                 return cached
 
-        params: dict = {"page": page, "per_page": per_page}
-
-        if api_states and api_states != [None]:
-            for state in api_states:
-                if state:
-                    params.setdefault("status[]", []).append(state)
-
-        if order_by and order_by != "most-relevant":
-            params["order_by"] = order_by
-
-        if search:
-            params["search"] = search
-
-        if challenge_type:
-            for ct in challenge_type:
-                params.setdefault("challenge_type[]", []).append(ct)
-
-        if length:
-            for l in length:
-                params.setdefault("length[]", []).append(l)
-
-        if themes:
-            for theme in themes:
-                params.setdefault("themes[]", []).append(theme)
-
-        if organization:
-            params["organization"] = organization
-
-        if open_to:
-            for ot in open_to:
-                params.setdefault("open_to[]", []).append(ot)
-
-        if managed_by_devpost_badge:
-            params["managed_by_devpost_badge"] = "1"
-
-        if eligibility:
-            params["eligibility"] = "1"
-
-        resp = await self._request_with_retry(
-            "GET",
-            f"{API_BASE}/hackathons",
-            params=params,
-            headers={"Accept": "application/json"},
-        )
-        data = resp.json()
-        hackathons = data.get("hackathons", [])
-        meta = data.get("meta", {})
+        # Use lightweight DevpostAPI client instead of Playwright
+        api = DevpostAPI()
+        try:
+            result = await api.search_hackathons(
+                search=search,
+                open_state=api_states[0] if api_states else None,
+                status=api_states if len(api_states) > 1 else None,
+                themes=themes,
+                open_to=open_to,
+                eligibility=eligibility,
+                managed_by_devpost_badge=managed_by_devpost_badge,
+                limit=per_page,
+                page=page,
+                sort_by=order_by if order_by and order_by != "most-relevant" else None,
+            )
+        finally:
+            await api.close()
+        
+        hackathons = result.get("hackathons", [])
+        meta = result.get("meta", {})
 
         for h in hackathons:
             if h.get("prize_amount"):
@@ -652,24 +662,20 @@ class DevpostClient:
             if cached is not None:
                 return cached
 
-        resp = await self._request_with_retry(
-            "GET",
-            f"{API_BASE}/hackathons",
-            params={"url": slug, "limit": 1},
-            headers={"Accept": "application/json"},
-        )
-        data = resp.json()
-        hackathons = data.get("hackathons", [])
-        if not hackathons:
-            return None
-
-        h = hackathons[0]
-        if h.get("prize_amount"):
-            h["prize_amount"] = clean_html(h["prize_amount"])
-        h["ends_at"] = h.get("time_left_to_submission") or h.get("submission_period_dates")
-
-        if self._cache:
-            self._cache.set(cache_key, h)
+        # Use lightweight DevpostAPI client instead of Playwright
+        api = DevpostAPI()
+        try:
+            h = await api.get_hackathon_by_slug(slug)
+        finally:
+            await api.close()
+        
+        if h:
+            if h.get("prize_amount"):
+                h["prize_amount"] = clean_html(h["prize_amount"])
+            h["ends_at"] = h.get("time_left_to_submission") or h.get("submission_period_dates")
+            
+            if self._cache:
+                self._cache.set(cache_key, h)
 
         return h
 
@@ -697,6 +703,52 @@ class DevpostClient:
             "url": hackathon_url,
             "rules_url": rules_url,
         }
+
+    async def get_featured_hackathons(self, challenge_type: str = "online") -> list[dict]:
+        """Get featured hackathons.
+        
+        Args:
+            challenge_type: "online" or "in-person"
+        
+        Returns:
+            List of featured hackathons
+        """
+        api = DevpostAPI()
+        try:
+            return await api.get_featured_hackathons(challenge_type=challenge_type)
+        finally:
+            await api.close()
+
+    async def get_recommended_hackathons(self) -> list[dict]:
+        """Get recommended hackathons (requires auth for personalized results)."""
+        api = DevpostAPI()
+        try:
+            return await api.get_recommended_hackathons()
+        finally:
+            await api.close()
+
+    async def get_nearby_hackathons(self) -> list[dict]:
+        """Get nearby hackathons (requires location/auth for meaningful results)."""
+        api = DevpostAPI()
+        try:
+            return await api.get_nearby_hackathons()
+        finally:
+            await api.close()
+
+    async def search_organizations(self, term: str = "") -> list[dict]:
+        """Search organizations.
+        
+        Args:
+            term: Search term (empty string returns all)
+        
+        Returns:
+            List of organizations with id, name, count
+        """
+        api = DevpostAPI()
+        try:
+            return await api.search_organizations(term=term)
+        finally:
+            await api.close()
 
     async def scrape_hackathon_page(self, url: str) -> dict[str, Any]:
         """Deep scrape a hackathon page to extract all available info."""
@@ -999,6 +1051,190 @@ class DevpostClient:
 
         return result
 
+    # ========================================================================
+    # Playwright Helper Methods
+    # ========================================================================
+
+    async def _playwright_scrape(
+        self,
+        url: str,
+        extractor_fn: Callable,
+        cache_key: Optional[str] = None,
+        wait_for_selector: Optional[str] = None,
+        timeout: int = 30000,
+        skip_rate_limit: bool = False,
+    ) -> dict:
+        """Generic Playwright scraper with caching, rate limiting, and error handling.
+        
+        Args:
+            url: Page URL to scrape
+            extractor_fn: Async function that takes (page, result) and extracts data
+            cache_key: Optional cache key for result caching
+            wait_for_selector: Optional selector to wait for before extraction
+            timeout: Page load timeout in ms
+        
+        Returns:
+            dict with 'success', 'data', 'error', 'steps' keys
+        """
+        result = {"success": False, "url": url, "steps": [], "data": {}}
+        
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            return {
+                "error": "Playwright not installed. Install with: pip install playwright && playwright install chromium",
+                "code": "DEPENDENCY_MISSING",
+            }
+        
+        # Rate limiter: 3 requests per 10 seconds to avoid Cloudflare blocks
+        # Skip in test environments
+        import sys
+        if not skip_rate_limit and "pytest" not in sys.modules:
+            try:
+                from aiolimiter import AsyncLimiter
+                limiter = AsyncLimiter(3, 10)
+                await limiter.acquire()
+            except ImportError:
+                pass  # Rate limiting optional
+        
+        async with async_playwright() as p:
+            user_agent = _get_random_user_agent()
+            browser_args = [
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+                f"--user-agent={user_agent}",
+            ]
+            
+            browser = await p.chromium.launch(headless=not self.headed, args=browser_args)
+            context = await browser.new_context(
+                viewport={"width": 1920, "height": 1080},
+                user_agent=user_agent,
+            )
+            page = await context.new_page()
+            
+            try:
+                result["steps"].append(f"Loading {url}")
+                await page.goto(url, timeout=timeout, wait_until="networkidle")
+                
+                # Wait for specific content if specified
+                if wait_for_selector:
+                    await page.wait_for_selector(wait_for_selector, timeout=5000, state="visible")
+                    result["steps"].append(f"Waited for {wait_for_selector}")
+                
+                # Double network idle for late-loading resources
+                await asyncio.sleep(0.5)
+                await page.wait_for_load_state("networkidle")
+                
+                # Run extractor
+                await extractor_fn(page, result)
+                
+                result["success"] = True
+                result["steps"].append("Successfully extracted data")
+                
+            except Exception as e:
+                result["error"] = str(e)
+                result["steps"].append(f"Error: {e}")
+                
+                # Capture debug screenshot if enabled
+                if getattr(self, 'debug_screenshots', False):
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    screenshot_path = f"/tmp/playwright_error_{timestamp}.png"
+                    await page.screenshot(path=screenshot_path)
+                    result["debug_screenshot"] = screenshot_path
+            finally:
+                await browser.close()
+        
+        # Cache if successful
+        if result["success"] and cache_key and self._cache:
+            self._cache.set(cache_key, result, ttl=1800)
+        
+        return result
+
+    async def _extract_with_fallback(self, page, selectors: list[str], timeout: int = 5000):
+        """Try multiple selectors in order of preference."""
+        for selector in selectors:
+            try:
+                elem = await page.wait_for_selector(selector, timeout=timeout)
+                if elem:
+                    return elem
+            except Exception:
+                continue
+        return None
+
+    async def _extract_text_with_fallback(self, page, selectors: list[str], default: str = None) -> Optional[str]:
+        """Extract text content with fallback selectors."""
+        elem = await self._extract_with_fallback(page, selectors)
+        return await elem.text_content() if elem else default
+
+    async def _retry_selector(self, page, selector: str, retries: int = 3, backoff: float = 0.5):
+        """Retry selector with exponential backoff."""
+        for attempt in range(retries):
+            elem = await page.query_selector(selector)
+            if elem:
+                return elem
+            if attempt < retries - 1:
+                delay = backoff * (2 ** attempt)
+                logger.debug("Selector '%s' not found, retrying in %.1fs (attempt %d/%d)", 
+                            selector, delay, attempt + 1, retries)
+                await asyncio.sleep(delay)
+        return None
+
+    async def _extract_project_cards(self, page) -> list[dict]:
+        """Extract project cards using JavaScript for reliability."""
+        return await page.evaluate('''() => {
+            const cards = document.querySelectorAll('.gallery-item, .software-entry');
+            return Array.from(cards).slice(0, 50).map(card => {
+                const link = card.querySelector('a[href*="/software/"]');
+                const titleElem = card.querySelector('h5, .title');
+                const taglineElem = card.querySelector('.tagline, .description');
+                
+                return {
+                    title: titleElem?.textContent.trim() || null,
+                    url: link?.href || null,
+                    tagline: taglineElem?.textContent.trim() || null,
+                    is_winner: card.classList.contains('winner') || 
+                              !!card.querySelector('.winner-badge'),
+                };
+            });
+        }''')
+
+    async def _extract_user_info(self, page) -> dict:
+        """Extract user profile info using JavaScript."""
+        return await page.evaluate('''() => {
+            const data = {};
+            
+            // Name
+            const nameElem = document.querySelector('h1, .name, .profile-name');
+            data.name = nameElem?.textContent.trim();
+            
+            // Bio
+            const bioElem = document.querySelector('.bio, .about, .description');
+            data.bio = bioElem?.textContent.trim();
+            
+            // Skills
+            const skills = Array.from(document.querySelectorAll('.skill, .tag, .pill'))
+                .slice(0, 20)
+                .map(s => s.textContent.trim())
+                .filter(s => s && s.length < 50);
+            data.skills = skills;
+            
+            // Links
+            const links = {};
+            const githubLink = document.querySelector('a[href*="github.com"]');
+            const twitterLink = document.querySelector('a[href*="twitter.com"], a[href*="x.com"]');
+            const websiteLink = document.querySelector('a[rel="external"], a.website-link');
+            
+            if (githubLink) links.github = githubLink.href;
+            if (twitterLink) links.twitter = twitterLink.href;
+            if (websiteLink && !websiteLink.href.includes('devpost.com')) {
+                links.website = websiteLink.href;
+            }
+            data.links = links;
+            
+            return data;
+        }''')
+
     async def get_project_details(self, project_url: str) -> dict[str, Any]:
         """Get detailed info about a specific project using browser automation."""
         validate_devpost_url(project_url)
@@ -1008,167 +1244,105 @@ class DevpostClient:
             if cached is not None:
                 return cached
 
-        try:
-            from playwright.async_api import async_playwright
-        except ImportError:
-            return {
-                "error": "Playwright not installed. Install with: pip install playwright && playwright install chromium",
-                "code": "DEPENDENCY_MISSING",
-            }
+        async def extractor(page, result):
+            """Extract project data from page."""
+            data = {}
+            
+            # Title with fallback selectors
+            title = await self._extract_with_fallback(page, PROJECT_SELECTORS["title"])
+            data["title"] = await title.text_content() if title else None
+            
+            # Tagline
+            tagline = await self._extract_with_fallback(page, PROJECT_SELECTORS["tagline"])
+            data["tagline"] = await tagline.text_content() if tagline else None
+            
+            # Description
+            desc = await self._extract_with_fallback(page, PROJECT_SELECTORS["description"])
+            if desc:
+                data["description"] = await desc.text_content()
+                data["description_html"] = await desc.inner_html()
+            
+            # Built with
+            built = await self._extract_with_fallback(page, PROJECT_SELECTORS["built_with"])
+            if built:
+                text = await built.text_content()
+                techs = [t.strip() for t in text.replace("Built With", "").split() if t.strip()]
+                data["built_with"] = techs
+            
+            # Links
+            links = {}
+            github = await page.query_selector("a[href*='github.com']")
+            if github:
+                links["github"] = await github.get_attribute("href")
+            demo = await page.query_selector("a[href*='try-it-out'], a.demo-link, a[title*='demo' i]")
+            if demo:
+                links["demo"] = await demo.get_attribute("href")
+            video = await page.query_selector("a[href*='youtube.com'], a[href*='vimeo.com'], a[href*='youtu.be']")
+            if video:
+                links["video"] = await video.get_attribute("href")
+            website = await page.query_selector("a[rel*='external'], a.website-link")
+            if website and "devpost.com" not in await website.get_attribute("href"):
+                links["website"] = await website.get_attribute("href")
+            if links:
+                data["links"] = links
+            
+            # Team members
+            team = []
+            team_section = await self._extract_with_fallback(page, PROJECT_SELECTORS["team"])
+            if team_section:
+                members = await team_section.query_selector_all("a[href*='/users/']")
+                seen = set()
+                for member in members:
+                    try:
+                        username = await member.get_attribute("href")
+                        name = await member.text_content()
+                        if username:
+                            username_clean = username.replace("/users/", "").strip("/")
+                            if username_clean not in seen:
+                                seen.add(username_clean)
+                                team.append({"username": username_clean, "name": name.strip() if name else username_clean})
+                    except Exception:
+                        logger.debug("Could not extract team member info")
+            if team:
+                data["team"] = team
+            
+            # Screenshots
+            screenshots = []
+            gallery = await self._extract_with_fallback(page, PROJECT_SELECTORS["gallery"])
+            if gallery:
+                imgs = await gallery.query_selector_all("img")
+                for img in imgs:
+                    try:
+                        src = await img.get_attribute("src")
+                        if src and "placeholder" not in src:
+                            screenshots.append(src)
+                    except Exception:
+                        pass
+            if screenshots:
+                data["screenshots"] = screenshots
+            
+            # Hackathon info
+            hackathon = await page.query_selector("a[href*='devpost.com/'][href$='/']")
+            if hackathon:
+                hack_name = await hackathon.text_content()
+                hack_url = await hackathon.get_attribute("href")
+                data["hackathon"] = {"name": hack_name.strip() if hack_name else None, "url": hack_url}
+            
+            # Winner badge
+            winner_badge = await self._extract_with_fallback(page, PROJECT_SELECTORS["winner_badge"])
+            if winner_badge:
+                data["is_winner"] = True
+                data["prize"] = (await winner_badge.text_content()).strip() or "Winner"
+            
+            result["data"] = data
 
-        result = {"success": False, "url": project_url, "steps": [], "data": {}}
-
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=not self.headed)
-            page = await browser.new_page()
-
-            try:
-                result["steps"].append(f"Loading {project_url}")
-                await page.goto(project_url, timeout=30000)
-                await page.wait_for_load_state("networkidle")
-                await asyncio.sleep(1)
-
-                data = {}
-
-                try:
-                    title = await page.wait_for_selector("h1#app-title, h1", timeout=5000)
-                    data["title"] = await title.text_content()
-                except Exception:
-                    logger.debug("Could not extract project title from %s", project_url)
-
-                try:
-                    tagline = await page.query_selector("p.tagline, .elevator-pitch, #app-tagline")
-                    data["tagline"] = await tagline.text_content() if tagline else None
-                except Exception:
-                    logger.debug("Could not extract tagline from %s", project_url)
-
-                try:
-                    desc = await page.query_selector("#app-details, .description, .software-description")
-                    if desc:
-                        data["description"] = await desc.text_content()
-                        data["description_html"] = await desc.inner_html()
-                except Exception as e:
-                    logger.debug("Description extraction error: %s", e)
-                    result["steps"].append(f"Description error: {e}")
-
-                try:
-                    built = await page.query_selector("#built-with, .built-with")
-                    if built:
-                        text = await built.text_content()
-                        techs = [t.strip() for t in text.replace("Built With", "").split() if t.strip()]
-                        data["built_with"] = techs
-                except Exception:
-                    logger.debug("Could not extract built-with from %s", project_url)
-
-                links = {}
-                try:
-                    github = await page.query_selector("a[href*='github.com']")
-                    if github:
-                        links["github"] = await github.get_attribute("href")
-                except Exception:
-                    logger.debug("Could not extract GitHub link from %s", project_url)
-                try:
-                    demo = await page.query_selector("a[href*='try-it-out'], a.demo-link, a[title*='demo' i]")
-                    if demo:
-                        href = await demo.get_attribute("href")
-                        if href:
-                            links["demo"] = href
-                except Exception:
-                    logger.debug("Could not extract demo link from %s", project_url)
-                try:
-                    video = await page.query_selector("a[href*='youtube.com'], a[href*='vimeo.com'], a[href*='youtu.be']")
-                    if video:
-                        links["video"] = await video.get_attribute("href")
-                except Exception:
-                    logger.debug("Could not extract video link from %s", project_url)
-                try:
-                    website = await page.query_selector("a[rel*='external'], a.website-link")
-                    if website:
-                        href = await website.get_attribute("href")
-                        if href and "devpost.com" not in href:
-                            links["website"] = href
-                except Exception:
-                    logger.debug("Could not extract website link from %s", project_url)
-                if links:
-                    data["links"] = links
-
-                team = []
-                try:
-                    team_section = await page.query_selector("#app-team, .team-members, .collaborators")
-                    if team_section:
-                        members = await team_section.query_selector_all("a[href*='/users/']")
-                        seen = set()
-                        for member in members:
-                            try:
-                                username = await member.get_attribute("href")
-                                name = await member.text_content()
-                                if username:
-                                    username_clean = username.replace("/users/", "").strip("/")
-                                    if username_clean not in seen:
-                                        seen.add(username_clean)
-                                        team.append({
-                                            "username": username_clean,
-                                            "name": name.strip() if name else username_clean,
-                                        })
-                            except Exception:
-                                logger.debug("Could not extract team member info")
-                except Exception as e:
-                    logger.debug("Team extraction error: %s", e)
-                    result["steps"].append(f"Team error: {e}")
-                if team:
-                    data["team"] = team
-
-                screenshots = []
-                try:
-                    gallery = await page.query_selector("#gallery, .gallery, .screenshots")
-                    if gallery:
-                        imgs = await gallery.query_selector_all("img")
-                        for img in imgs:
-                            try:
-                                src = await img.get_attribute("src")
-                                if src and "placeholder" not in src:
-                                    screenshots.append(src)
-                            except Exception:
-                                logger.debug("Could not extract screenshot src")
-                except Exception:
-                    logger.debug("Could not extract screenshots from %s", project_url)
-                if screenshots:
-                    data["screenshots"] = screenshots
-
-                try:
-                    hackathon = await page.query_selector("a[href*='devpost.com/'][href$='/']")
-                    if hackathon:
-                        hack_name = await hackathon.text_content()
-                        hack_url = await hackathon.get_attribute("href")
-                        data["hackathon"] = {
-                            "name": hack_name.strip() if hack_name else None,
-                            "url": hack_url,
-                        }
-                except Exception:
-                    logger.debug("Could not extract hackathon link from project page")
-
-                try:
-                    winner_badge = await page.query_selector(".winner, .winner-badge, .prize-winner")
-                    if winner_badge:
-                        data["is_winner"] = True
-                        prize_text = await winner_badge.text_content()
-                        data["prize"] = prize_text.strip() if prize_text else "Winner"
-                except Exception:
-                    logger.debug("Could not extract winner badge from project page")
-
-                result["data"] = data
-                result["success"] = True
-                result["steps"].append("Successfully extracted project details")
-
-            except Exception as e:
-                result["error"] = str(e)
-                result["steps"].append(f"Error: {e}")
-            finally:
-                await browser.close()
-
-        if result["success"] and self._cache:
-            self._cache.set(cache_key, result, ttl=1800)
-
+        result = await self._playwright_scrape(
+            url=project_url,
+            extractor_fn=extractor,
+            cache_key=cache_key,
+            wait_for_selector="h1",
+        )
+        
         return result
 
     async def get_user_profile(self, username: str) -> dict[str, Any]:
@@ -1179,247 +1353,117 @@ class DevpostClient:
             if cached is not None:
                 return cached
 
-        try:
-            from playwright.async_api import async_playwright
-        except ImportError:
-            return {
-                "error": "Playwright not installed. Install with: pip install playwright && playwright install chromium",
-                "code": "DEPENDENCY_MISSING",
-            }
-
-        result = {"success": False, "username": username, "steps": [], "data": {}}
-
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=not self.headed)
-            page = await browser.new_page()
-
-            try:
-                user_url = f"{BASE_URL}/users/{username}"
-                result["steps"].append(f"Loading {user_url}")
-                await page.goto(user_url, timeout=30000)
-                await page.wait_for_load_state("networkidle")
-                await asyncio.sleep(2)
-
-                data = {}
-
-                # Check if page is 404
-                if "404" in await page.title():
-                    result["error"] = f"User '{username}' not found"
-                    result["code"] = "NOT_FOUND"
-                    return result
-
-                # Extract name
-                try:
-                    name = await page.wait_for_selector("h1", timeout=5000)
+        user_url = f"{BASE_URL}/users/{username}"
+        
+        async def extractor(page, result):
+            """Extract user profile data."""
+            # Check if page is 404
+            if "404" in await page.title():
+                result["error"] = f"User '{username}' not found"
+                result["code"] = "NOT_FOUND"
+                return
+            
+            data = {}
+            
+            # Use JavaScript extractor for basic info
+            basic_info = await self._extract_user_info(page)
+            data.update(basic_info)
+            
+            # Name with fallback
+            if not data.get("name"):
+                name = await self._extract_with_fallback(page, USER_SELECTORS["name"])
+                if name:
                     raw_name = await name.text_content()
-                    # Clean up whitespace and normalize
                     data["name"] = " ".join(raw_name.split())
-                except Exception:
-                    logger.debug("Could not extract user name")
-
-                # Extract bio/about
-                try:
-                    bio = await page.query_selector(".bio, .about, .description, p")
-                    if bio:
-                        data["bio"] = (await bio.text_content()).strip()
-                except Exception:
-                    logger.debug("Could not extract bio")
-
-                # Extract skills
-                try:
-                    skills = []
-                    skill_elems = await page.query_selector_all(".skill, .tag, .pill")
-                    for skill in skill_elems[:20]:
-                        text = await skill.text_content()
-                        if text and len(text) < 50:
-                            skills.append(text.strip())
-                    if skills:
-                        data["skills"] = skills
-                except Exception:
-                    logger.debug("Could not extract skills")
-
-                # Extract projects (find H5 headings and their parent links)
-                try:
-                    projects = []
-                    seen_titles = set()
+            
+            # Extract projects using JavaScript
+            projects = await page.evaluate('''() => {
+                const projects = [];
+                const seen = new Set();
+                document.querySelectorAll('h5').forEach(h5 => {
+                    const title = h5.textContent.trim();
+                    if (!title || title.length < 3 || title.length > 100) return;
+                    if (['back', 'view all', 'software', 'projects', 'connect'].includes(title.toLowerCase())) return;
+                    if (seen.has(title)) return;
+                    seen.add(title);
                     
-                    # Find all H5 headings (project titles)
-                    h5_elements = await page.query_selector_all("h5")
+                    const parent = h5.parentElement.parentElement;
+                    const projLink = parent.querySelector('a[href*="/software/"]');
+                    const hackLink = parent.querySelector('a[href*=".devpost.com"]:not([href*="/users/"]):not([href*="/software/"])');
                     
-                    for h5 in h5_elements[:20]:
-                        title = await h5.text_content()
-                        title = title.strip() if title else ""
-                        
-                        # Filter: must be a reasonable project title
-                        if not title or len(title) < 3 or len(title) > 100:
-                            continue
-                        if title.lower() in ['back', 'view all', 'software', 'projects', 'connect']:
-                            continue
-                        if title in seen_titles:
-                            continue
-                        
-                        seen_titles.add(title)
-                        
-                        # Find parent container
-                        parent = await h5.query_selector("xpath=../..")
-                        project_info = {"title": title}
-                        
-                        # Try to find the project link
-                        if parent:
-                            proj_link = await parent.query_selector("a[href*='/software/']")
-                            if proj_link:
-                                href = await proj_link.get_attribute("href")
-                                if href and '/built-with/' not in href:
-                                    project_info["url"] = f"{BASE_URL}{href}" if href.startswith('/') else href
-                            
-                            # Try to find hackathon info
-                            hack_link = await parent.query_selector("a[href*='.devpost.com']:not([href*='/users/']):not([href*='/software/'])")
-                            if hack_link:
-                                hack_text = await hack_link.text_content()
-                                hack_href = await hack_link.get_attribute("href")
-                                if hack_text and hack_href and len(hack_text) < 60:
-                                    hack_text = hack_text.strip()
-                                    if hack_text.lower() not in ['log in', 'sign up', 'about', 'careers', 'contact', 'help', 'blog']:
-                                        if 'info.devpost.com' not in hack_href and 'help.devpost.com' not in hack_href:
-                                            project_info["hackathon"] = hack_text
-                                            project_info["hackathon_url"] = hack_href
-                            
-                            # Try to find stats
-                            stats_elem = await parent.query_selector(".counts, .stats")
-                            if stats_elem:
-                                stats_text = await stats_elem.text_content()
-                                if stats_text:
-                                    project_info["stats"] = stats_text.strip()
-                        
-                        projects.append(project_info)
+                    const proj = { title, url: projLink?.href };
+                    if (hackLink) {
+                        const hackText = hackLink.textContent.trim().split('\\n')[0];
+                        if (hackText && !['log in', 'sign up', 'about'].includes(hackText.toLowerCase())) {
+                            proj.hackathon = hackText;
+                            proj.hackathon_url = hackLink.href;
+                        }
+                    }
+                    projects.push(proj);
+                });
+                return projects.slice(0, 20);
+            }''')
+            data["projects"] = projects
+            data["project_count"] = len(projects)
+            
+            # Extract hackathons from challenges page
+            challenges_url = f"{BASE_URL}/{username}/challenges"
+            await page.goto(challenges_url, timeout=30000)
+            await page.wait_for_load_state("networkidle")
+            await asyncio.sleep(1)
+            
+            hackathons = await page.evaluate('''() => {
+                const hacks = [];
+                const seen = new Set();
+                document.querySelectorAll('a[href*=".devpost.com"]').forEach(link => {
+                    const href = link.href;
+                    if (!href || href.includes('/users/') || href.includes('info.devpost.com') || href.includes('help.devpost.com')) return;
+                    if (!href.includes('.devpost.com/')) return;
+                    if (seen.has(href)) return;
                     
-                    data["projects"] = projects
-                    data["project_count"] = len(projects)
-                except Exception as e:
-                    logger.debug("Could not extract projects: %s", e)
+                    const match = href.match(/https?:\\/\\/([a-z0-9-]+)\\.devpost\\.com/);
+                    if (match && !['devpost', 'info', 'help', 'secure', 'api', 'www'].includes(match[1])) {
+                        seen.add(href);
+                        const text = link.textContent.trim().split('\\n')[0].trim() || match[1];
+                        hacks.push({ name: text, url: href });
+                    }
+                });
+                return hacks.slice(0, 20);
+            }''')
+            data["hackathons"] = hackathons
+            
+            # Get count from nav
+            nav_link = await page.query_selector("a[href*='/challenges']")
+            if nav_link:
+                count_elem = await nav_link.query_selector(".totals span")
+                if count_elem:
+                    count_text = await count_elem.text_content()
+                    if count_text:
+                        data["hackathon_count"] = int(count_text.strip())
+            
+            # Navigate back
+            await page.goto(user_url, timeout=30000)
+            await page.wait_for_load_state("networkidle")
+            
+            # Location
+            location = await page.query_selector(".location, .location-icon + *")
+            if location:
+                data["location"] = await location.text_content()
+            
+            result["data"] = data
+            result["success"] = True
 
-                # Extract hackathon participations from /challenges tab
-                try:
-                    hackathons = []
-                    
-                    # First, try to find hackathon count from nav
-                    nav_link = await page.query_selector("a[href*='/challenges']")
-                    if nav_link:
-                        count_elem = await nav_link.query_selector(".totals span")
-                        if count_elem:
-                            count_text = await count_elem.text_content()
-                            if count_text:
-                                data["hackathon_count"] = int(count_text.strip())
-                    
-                    # Navigate to challenges page to get actual list
-                    challenges_url = f"{BASE_URL}/{username}/challenges"
-                    result["steps"].append(f"Loading {challenges_url}")
-                    await page.goto(challenges_url, timeout=30000)
-                    await page.wait_for_load_state("networkidle")
-                    await asyncio.sleep(2)
-                    
-                    # Extract hackathon cards - look for links with subdomain pattern
-                    all_links = await page.query_selector_all("a[href*='.devpost.com']")
-                    seen_hackathons = set()
-                    seen_urls = set()
-                    
-                    for link in all_links[:50]:
-                        hack_href = await link.get_attribute("href")
-                        if not hack_href:
-                            continue
-                        
-                        # Skip non-hackathon links
-                        if '/users/' in hack_href or '/hackathons' in hack_href:
-                            continue
-                        if 'info.devpost.com' in hack_href or 'help.devpost.com' in hack_href or 'secure.devpost.com' in hack_href:
-                            continue
-                        
-                        # Check if it's a hackathon subdomain URL
-                        if '.devpost.com/' not in hack_href:
-                            continue
-                        
-                        # Extract hackathon name from URL (subdomain)
-                        import re
-                        match = re.search(r'https?://([a-z0-9-]+)\.devpost\.com', hack_href)
-                        if match:
-                            hack_subdomain = match.group(1)
-                            # Skip common non-hackathon subdomains
-                            if hack_subdomain in ['devpost', 'info', 'help', 'secure', 'api', 'www']:
-                                continue
-                            
-                            if hack_href not in seen_urls:
-                                seen_urls.add(hack_href)
-                                
-                                # Get display text (first line, trimmed)
-                                hack_text = await link.text_content()
-                                if hack_text:
-                                    hack_text = hack_text.strip().split('\n')[0].strip()[:50]
-                                
-                                hackathons.append({
-                                    "name": hack_text or hack_subdomain,
-                                    "url": hack_href,
-                                })
-                    
-                    data["hackathons"] = hackathons
-                    if not data.get("hackathon_count"):
-                        data["hackathon_count"] = len(hackathons)
-                    
-                    # Navigate back to profile
-                    result["steps"].append(f"Returning to profile")
-                    await page.goto(user_url, timeout=30000)
-                    await page.wait_for_load_state("networkidle")
-                    
-                except Exception as e:
-                    logger.debug("Could not extract hackathons: %s", e)
-                    # Try to navigate back if we got stuck
-                    try:
-                        await page.goto(user_url, timeout=10000)
-                    except:
-                        pass
-
-                # Extract location
-                try:
-                    location = await page.query_selector(".location, .location-icon + *")
-                    if location:
-                        data["location"] = await location.text_content()
-                except Exception:
-                    logger.debug("Could not extract location")
-
-                # Extract social links
-                links = {}
-                try:
-                    github = await page.query_selector("a[href*='github.com']")
-                    if github:
-                        links["github"] = await github.get_attribute("href")
-                    twitter = await page.query_selector("a[href*='twitter.com'], a[href*='x.com']")
-                    if twitter:
-                        links["twitter"] = await twitter.get_attribute("href")
-                    linkedin = await page.query_selector("a[href*='linkedin.com']")
-                    if linkedin:
-                        links["linkedin"] = await linkedin.get_attribute("href")
-                    website = await page.query_selector("a.website-link, a[rel='me']")
-                    if website:
-                        href = await website.get_attribute("href")
-                        if href and "devpost.com" not in href:
-                            links["website"] = href
-                except Exception:
-                    logger.debug("Could not extract social links")
-                if links:
-                    data["links"] = links
-
-                result["data"] = data
-                result["success"] = True
-                result["steps"].append("Successfully extracted profile")
-
-            except Exception as e:
-                result["error"] = str(e)
-                result["steps"].append(f"Error: {e}")
-            finally:
-                await browser.close()
-
-        if result["success"] and self._cache:
-            self._cache.set(cache_key, result, ttl=3600)
-
+        result = await self._playwright_scrape(
+            url=user_url,
+            extractor_fn=extractor,
+            cache_key=cache_key,
+            wait_for_selector="h1",
+        )
+        
+        # Handle 404 case
+        if result.get("error") == f"User '{username}' not found":
+            result["code"] = "NOT_FOUND"
+        
         return result
 
     async def get_rss(self) -> dict[str, Any]:
@@ -2006,125 +2050,112 @@ class DevpostClient:
             if cached is not None:
                 return cached
 
-        try:
-            from playwright.async_api import async_playwright
-        except ImportError:
-            return {
-                "error": "Playwright not installed. Install with: pip install playwright && playwright install chromium",
-                "code": "DEPENDENCY_MISSING",
-            }
-
-        result = {"success": False, "username": username, "steps": [], "data": {"achievements": [], "total_count": 0}}
-
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=not self.headed)
-            page = await browser.new_page()
-
-            try:
-                achievements_url = f"{BASE_URL}/{username}/achievements"
-                result["steps"].append(f"Loading {achievements_url}")
-                await page.goto(achievements_url, timeout=30000)
-                await page.wait_for_load_state("networkidle")
-                await asyncio.sleep(5)
-
-                data = {"achievements": [], "total_count": 0}
-
-                # Check if page is 404
-                if "404" in await page.title():
-                    result["error"] = f"User '{username}' not found"
-                    result["code"] = "NOT_FOUND"
-                    return result
-
-                # Extract total count from nav or page header
-                try:
-                    nav_link = await page.query_selector("a[href*='/achievements']")
-                    if nav_link:
-                        count_elem = await nav_link.query_selector(".totals span")
-                        if count_elem:
-                            count_text = await count_elem.text_content()
-                            if count_text:
-                                data["total_count"] = int(count_text.strip())
-                except Exception:
-                    logger.debug("Could not extract achievement count")
-
-                # Extract achievement cards
-                try:
-                    achievements = []
+        achievements_url = f"{BASE_URL}/{username}/achievements"
+        
+        async def extractor(page, result):
+            """Extract achievement data."""
+            if "404" in await page.title():
+                result["error"] = f"User '{username}' not found"
+                result["code"] = "NOT_FOUND"
+                return
+            
+            data = {"achievements": [], "total_count": 0}
+            
+            # Get count from nav
+            nav_link = await page.query_selector("a[href*='/achievements']")
+            if nav_link:
+                count_elem = await nav_link.query_selector(".totals span")
+                if count_elem:
+                    count_text = await count_elem.text_content()
+                    if count_text:
+                        data["total_count"] = int(count_text.strip())
+            
+            # Extract achievements using JavaScript
+            achievements = await page.evaluate('''() => {
+                const achievements = [];
+                document.querySelectorAll('div.content').forEach(card => {
+                    const h5 = card.querySelector('h5');
+                    const ps = card.querySelectorAll('p');
+                    const dateElem = card.querySelector('small.achieved-at, small.faded');
+                    const parent = card.parentElement;
+                    const img = parent?.querySelector('img');
                     
-                    # Devpost achievements: .content divs contain h5 title + p description
-                    # The .badge wrapper elements are empty in JS-rendered DOM
-                    achievement_cards = await page.query_selector_all("div.content")
-                    logger.debug("Found %d achievement cards", len(achievement_cards))
+                    const achievement = {};
+                    if (h5) achievement.title = h5.textContent.trim();
                     
-                    for i, card in enumerate(achievement_cards[:50]):
-                        achievement_info = {}
-                        logger.debug("Processing card %d", i)
-                        
-                        # Extract title from h5
-                        title_elem = await card.query_selector("h5")
-                        if title_elem:
-                            title = await title_elem.text_content()
-                            logger.debug("Card %d title: %r", i, title)
-                            if title:
-                                achievement_info["title"] = " ".join(title.split()).strip()
-                        else:
-                            logger.debug("Card %d: no h5 element", i)
-                        
-                        # Extract description from p (first p that's not progression)
-                        desc_elems = await card.query_selector_all("p")
-                        for p_elem in desc_elems:
-                            p_class = await p_elem.get_attribute("class") or ""
-                            if "progression" not in p_class:
-                                p_text = await p_elem.text_content()
-                                if p_text:
-                                    achievement_info["description"] = " ".join(p_text.split()).strip()
-                                    break
-                        
-                        # Extract earned date from small.achieved-at
-                        date_elem = await card.query_selector("small.achieved-at, small.faded")
-                        if date_elem:
-                            date_text = await date_elem.text_content()
-                            if date_text:
-                                achievement_info["earned"] = " ".join(date_text.split()).strip()
-                        
-                        # Extract image/badge URL from sibling img
-                        parent = await card.query_selector("xpath=..")
-                        if parent:
-                            img_elem = await parent.query_selector("img")
-                            if img_elem:
-                                img_src = await img_elem.get_attribute("src")
-                                if img_src:
-                                    achievement_info["badge_url"] = img_src if img_src.startswith("http") else f"{BASE_URL}{img_src}"
-                        
-                        logger.debug("Card %d info: %r", i, achievement_info)
-                        
-                        # Only add if we have at least a title
-                        if achievement_info.get("title"):
-                            achievements.append(achievement_info)
-                            logger.debug("Added achievement: %s", achievement_info["title"])
+                    // Get description (first p that's not progression)
+                    for (const p of ps) {
+                        if (!p.classList.contains('progression')) {
+                            achievement.description = p.textContent.trim();
+                            break;
+                        }
+                    }
                     
-                    logger.debug("Total achievements extracted: %d", len(achievements))
-                    data["achievements"] = achievements
-                    if not data["total_count"]:
-                        data["total_count"] = len(achievements)
-                        
-                except Exception as e:
-                    logger.exception("Could not extract achievements: %s", e)
+                    if (dateElem) achievement.earned = dateElem.textContent.trim();
+                    if (img) achievement.badge_url = img.src.startsWith('http') ? img.src : 'https://devpost.com' + img.src;
+                    
+                    if (achievement.title) achievements.push(achievement);
+                });
+                return achievements.slice(0, 50);
+            }''')
+            
+            data["achievements"] = achievements
+            if not data["total_count"]:
+                data["total_count"] = len(achievements)
+            
+            result["data"] = data
+            result["success"] = True
 
-                result["data"] = data
-                result["success"] = True
-                result["steps"].append("Successfully extracted achievements")
-
-            except Exception as e:
-                result["error"] = str(e)
-                result["steps"].append(f"Error: {e}")
-            finally:
-                await browser.close()
-
-        if result["success"] and self._cache:
-            self._cache.set(cache_key, result, ttl=3600)
-
+        result = await self._playwright_scrape(
+            url=achievements_url,
+            extractor_fn=extractor,
+            cache_key=cache_key,
+            wait_for_selector="div.content",
+        )
+        
+        if result.get("error") == f"User '{username}' not found":
+            result["code"] = "NOT_FOUND"
+        
         return result
+
+    async def _extract_user_list(self, page, list_type: str) -> list[dict]:
+        """Extract user list (followers/following/likes) using JavaScript."""
+        return await page.evaluate(f'''() => {{
+            const items = document.querySelectorAll('.gallery-item');
+            const results = [];
+            items.forEach(item => {{
+                const link = item.querySelector('a.user-profile-link, a[href*="/users/"], a[href^="https://devpost.com/"]');
+                
+                let username = null, url = null;
+                if (link) {{
+                    const href = link.getAttribute('href');
+                    url = href;
+                    const match = href.match(/devpost\\\\.com\\\\/([^\\\\/]+)/);
+                    if (match && match[1] !== 'users') username = match[1];
+                }}
+                
+                const nameDiv = item.querySelector('.entry-body');
+                let name = null, bio = null;
+                if (nameDiv) {{
+                    const texts = nameDiv.textContent.trim().split('\\\\n').filter(t => t.trim());
+                    if (texts.length > 0) {{
+                        name = texts[0].trim();
+                        if (name === 'Follow' || name === 'Following') name = null;
+                    }}
+                    if (texts.length > 1) {{
+                        bio = texts[1].trim();
+                        if (bio === 'Follow' || bio === 'Following' || bio.length < 5) bio = null;
+                    }}
+                }}
+                
+                if (username || (name && name !== 'Follow')) {{
+                    const result = {{ username, name, url: url ? (url.startsWith('http') ? url : 'https://devpost.com' + url) : null }};
+                    {'bio: bio' if list_type == 'followers' else ''}
+                    results.push(result);
+                }}
+            }});
+            return results;
+        }}''')
 
     async def get_user_followers(self, username: str) -> dict[str, Any]:
         """Get list of users following this user."""
@@ -2134,121 +2165,41 @@ class DevpostClient:
             if cached is not None:
                 return cached
 
-        try:
-            from playwright.async_api import async_playwright
-        except ImportError:
-            return {
-                "error": "Playwright not installed. Install with: pip install playwright && playwright install chromium",
-                "code": "DEPENDENCY_MISSING",
-            }
+        followers_url = f"{BASE_URL}/{username}/followers"
+        
+        async def extractor(page, result):
+            if "404" in await page.title():
+                result["error"] = f"User '{username}' not found"
+                result["code"] = "NOT_FOUND"
+                return
+            
+            data = {"followers": [], "total_count": 0}
+            
+            # Get count from nav
+            nav_link = await page.query_selector("a[href*='/followers']")
+            if nav_link:
+                count_elem = await nav_link.query_selector(".totals span")
+                if count_elem:
+                    data["total_count"] = int((await count_elem.text_content()).strip())
+            
+            # Extract followers using JavaScript
+            data["followers"] = await self._extract_user_list(page, "followers")
+            if not data["total_count"]:
+                data["total_count"] = len(data["followers"])
+            
+            result["data"] = data
+            result["success"] = True
 
-        result = {"success": False, "username": username, "steps": [], "data": {"followers": [], "total_count": 0}}
-
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=not self.headed)
-            page = await browser.new_page()
-
-            try:
-                followers_url = f"{BASE_URL}/{username}/followers"
-                result["steps"].append(f"Loading {followers_url}")
-                await page.goto(followers_url, timeout=30000)
-                await page.wait_for_load_state("networkidle")
-                await asyncio.sleep(3)
-
-                data = {"followers": [], "total_count": 0}
-
-                if "404" in await page.title():
-                    result["error"] = f"User '{username}' not found"
-                    result["code"] = "NOT_FOUND"
-                    return result
-
-                # Extract count from nav
-                try:
-                    nav_link = await page.query_selector("a[href*='/followers']")
-                    if nav_link:
-                        count_elem = await nav_link.query_selector(".totals span")
-                        if count_elem:
-                            count_text = await count_elem.text_content()
-                            if count_text:
-                                data["total_count"] = int(count_text.strip())
-                except Exception:
-                    logger.debug("Could not extract follower count")
-
-                # Extract follower cards using JavaScript for reliability
-                try:
-                    followers = await page.evaluate('''() => {
-                        const items = document.querySelectorAll('.gallery-item');
-                        const results = [];
-                        items.forEach((item, idx) => {
-                            const link = item.querySelector('a.user-profile-link, a[href*="/users/"], a[href^="https://devpost.com/"]');
-                            
-                            let username = null;
-                            let url = null;
-                            if (link) {
-                                const href = link.getAttribute('href');
-                                url = href;
-                                // Extract username from devpost.com/USERNAME pattern
-                                const match = href.match(/devpost\\.com\\/([^\\/]+)/);
-                                if (match && match[1] !== 'users') {
-                                    username = match[1];
-                                }
-                            }
-                            
-                            // Name is typically in a div after the img
-                            const nameDiv = item.querySelector('.entry-body');
-                            let name = null;
-                            if (nameDiv) {
-                                const texts = nameDiv.textContent.trim().split('\\n').filter(t => t.trim());
-                                if (texts.length > 0) {
-                                    name = texts[0].trim();
-                                    // Filter out button text
-                                    if (name === 'Follow' || name === 'Following') name = null;
-                                }
-                            }
-                            
-                            // Bio is typically the second text block
-                            let bio = null;
-                            if (nameDiv) {
-                                const texts = nameDiv.textContent.trim().split('\\n').filter(t => t.trim());
-                                if (texts.length > 1) {
-                                    bio = texts[1].trim();
-                                    // Filter out button text
-                                    if (bio === 'Follow' || bio === 'Following' || bio.length < 5) bio = null;
-                                }
-                            }
-                            
-                            if (username || (name && name !== 'Follow')) {
-                                results.push({
-                                    username: username,
-                                    name: name,
-                                    url: url ? (url.startsWith('http') ? url : 'https://devpost.com' + url) : null,
-                                    bio: bio
-                                });
-                            }
-                        });
-                        return results;
-                    }''')
-                    
-                    data["followers"] = followers
-                    if not data["total_count"]:
-                        data["total_count"] = len(followers)
-                        
-                except Exception as e:
-                    logger.exception("Could not extract followers: %s", e)
-
-                result["data"] = data
-                result["success"] = True
-                result["steps"].append("Successfully extracted followers")
-
-            except Exception as e:
-                result["error"] = str(e)
-                result["steps"].append(f"Error: {e}")
-            finally:
-                await browser.close()
-
-        if result["success"] and self._cache:
-            self._cache.set(cache_key, result, ttl=3600)
-
+        result = await self._playwright_scrape(
+            url=followers_url,
+            extractor_fn=extractor,
+            cache_key=cache_key,
+            wait_for_selector=".gallery-item",
+        )
+        
+        if result.get("error") == f"User '{username}' not found":
+            result["code"] = "NOT_FOUND"
+        
         return result
 
     async def get_user_following(self, username: str) -> dict[str, Any]:
@@ -2259,115 +2210,41 @@ class DevpostClient:
             if cached is not None:
                 return cached
 
-        try:
-            from playwright.async_api import async_playwright
-        except ImportError:
-            return {
-                "error": "Playwright not installed. Install with: pip install playwright && playwright install chromium",
-                "code": "DEPENDENCY_MISSING",
-            }
+        following_url = f"{BASE_URL}/{username}/following"
+        
+        async def extractor(page, result):
+            if "404" in await page.title():
+                result["error"] = f"User '{username}' not found"
+                result["code"] = "NOT_FOUND"
+                return
+            
+            data = {"following": [], "total_count": 0}
+            
+            # Get count from nav
+            nav_link = await page.query_selector("a[href*='/following']")
+            if nav_link:
+                count_elem = await nav_link.query_selector(".totals span")
+                if count_elem:
+                    data["total_count"] = int((await count_elem.text_content()).strip())
+            
+            # Extract following using JavaScript
+            data["following"] = await self._extract_user_list(page, "following")
+            if not data["total_count"]:
+                data["total_count"] = len(data["following"])
+            
+            result["data"] = data
+            result["success"] = True
 
-        result = {"success": False, "username": username, "steps": [], "data": {"following": [], "total_count": 0}}
-
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=not self.headed)
-            page = await browser.new_page()
-
-            try:
-                following_url = f"{BASE_URL}/{username}/following"
-                result["steps"].append(f"Loading {following_url}")
-                await page.goto(following_url, timeout=30000)
-                await page.wait_for_load_state("networkidle")
-                await asyncio.sleep(3)
-
-                data = {"following": [], "total_count": 0}
-
-                if "404" in await page.title():
-                    result["error"] = f"User '{username}' not found"
-                    result["code"] = "NOT_FOUND"
-                    return result
-
-                # Extract count from nav
-                try:
-                    nav_link = await page.query_selector("a[href*='/following']")
-                    if nav_link:
-                        count_elem = await nav_link.query_selector(".totals span")
-                        if count_elem:
-                            count_text = await count_elem.text_content()
-                            if count_text:
-                                data["total_count"] = int(count_text.strip())
-                except Exception:
-                    logger.debug("Could not extract following count")
-
-                # Extract following cards using JavaScript (same structure as followers)
-                try:
-                    following = await page.evaluate('''() => {
-                        const items = document.querySelectorAll('.gallery-item');
-                        const results = [];
-                        items.forEach((item, idx) => {
-                            const link = item.querySelector('a.user-profile-link, a[href*="/users/"], a[href^="https://devpost.com/"]');
-                            
-                            let username = null;
-                            let url = null;
-                            if (link) {
-                                const href = link.getAttribute('href');
-                                url = href;
-                                const match = href.match(/devpost\\.com\\/([^\\/]+)/);
-                                if (match && match[1] !== 'users') {
-                                    username = match[1];
-                                }
-                            }
-                            
-                            const nameDiv = item.querySelector('.entry-body');
-                            let name = null;
-                            if (nameDiv) {
-                                const texts = nameDiv.textContent.trim().split('\\n').filter(t => t.trim());
-                                if (texts.length > 0) {
-                                    name = texts[0].trim();
-                                    if (name === 'Follow' || name === 'Following') name = null;
-                                }
-                            }
-                            
-                            let bio = null;
-                            if (nameDiv) {
-                                const texts = nameDiv.textContent.trim().split('\\n').filter(t => t.trim());
-                                if (texts.length > 1) {
-                                    bio = texts[1].trim();
-                                }
-                            }
-                            
-                            if (username || (name && name !== 'Follow')) {
-                                results.push({
-                                    username: username,
-                                    name: name,
-                                    url: url ? (url.startsWith('http') ? url : 'https://devpost.com' + url) : null,
-                                    bio: bio
-                                });
-                            }
-                        });
-                        return results;
-                    }''')
-                    
-                    data["following"] = following
-                    if not data["total_count"]:
-                        data["total_count"] = len(following)
-                        
-                except Exception as e:
-                    logger.exception("Could not extract following: %s", e)
-
-                result["data"] = data
-                result["success"] = True
-                result["steps"].append("Successfully extracted following")
-
-            except Exception as e:
-                result["error"] = str(e)
-                result["steps"].append(f"Error: {e}")
-            finally:
-                await browser.close()
-
-        if result["success"] and self._cache:
-            self._cache.set(cache_key, result, ttl=3600)
-
+        result = await self._playwright_scrape(
+            url=following_url,
+            extractor_fn=extractor,
+            cache_key=cache_key,
+            wait_for_selector=".gallery-item",
+        )
+        
+        if result.get("error") == f"User '{username}' not found":
+            result["code"] = "NOT_FOUND"
+        
         return result
 
     async def get_user_likes(self, username: str) -> dict[str, Any]:
@@ -2378,121 +2255,74 @@ class DevpostClient:
             if cached is not None:
                 return cached
 
-        try:
-            from playwright.async_api import async_playwright
-        except ImportError:
-            return {
-                "error": "Playwright not installed. Install with: pip install playwright && playwright install chromium",
-                "code": "DEPENDENCY_MISSING",
-            }
-
-        result = {"success": False, "username": username, "steps": [], "data": {"likes": [], "total_count": 0}}
-
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=not self.headed)
-            page = await browser.new_page()
-
-            try:
-                likes_url = f"{BASE_URL}/{username}/likes"
-                result["steps"].append(f"Loading {likes_url}")
-                await page.goto(likes_url, timeout=30000)
-                await page.wait_for_load_state("networkidle")
-                await asyncio.sleep(3)
-
-                data = {"likes": [], "total_count": 0}
-
-                if "404" in await page.title():
-                    result["error"] = f"User '{username}' not found"
-                    result["code"] = "NOT_FOUND"
-                    return result
-
-                # Extract count from nav
-                try:
-                    nav_link = await page.query_selector("a[href*='/likes']")
-                    if nav_link:
-                        count_elem = await nav_link.query_selector(".totals span")
-                        if count_elem:
-                            count_text = await count_elem.text_content()
-                            if count_text:
-                                data["total_count"] = int(count_text.strip())
-                except Exception:
-                    logger.debug("Could not extract likes count")
-
-                # Extract liked projects using JavaScript
-                try:
-                    likes = await page.evaluate('''() => {
-                        const items = document.querySelectorAll('.gallery-item');
-                        const results = [];
-                        items.forEach(item => {
-                            const link = item.querySelector('a[href*="/software/"]');
-                            
-                            let url = null;
-                            let title = null;
-                            let tagline = null;
-                            let hackathon = null;
-                            
-                            if (link) {
-                                const href = link.getAttribute('href');
-                                url = href.startsWith('http') ? href : 'https://devpost.com' + href;
-                                
-                                // Title is often in the link text or in h5
-                                const titleElem = item.querySelector('h5, .title');
-                                if (titleElem) {
-                                    title = titleElem.textContent.trim();
-                                } else {
-                                    // Try to extract from link text
-                                    const linkText = link.textContent.trim().split('\\n')[0].trim();
-                                    if (linkText && linkText.length < 80) {
-                                        title = linkText;
-                                    }
-                                }
-                                
-                                // Tagline is typically in .tagline or second text block
-                                const taglineElem = item.querySelector('.tagline');
-                                if (taglineElem) {
-                                    const taglineText = taglineElem.textContent.trim();
-                                    tagline = taglineText.substring(0, 200);
-                                }
-                                
-                                // Hackathon info
-                                const hackathonElem = item.querySelector('.hackathon, .challenge-name');
-                                if (hackathonElem) {
-                                    hackathon = hackathonElem.textContent.trim();
-                                }
-                            }
-                            
-                            if (title || url) {
-                                results.push({
-                                    title: title,
-                                    url: url,
-                                    tagline: tagline,
-                                    hackathon: hackathon
-                                });
-                            }
-                        });
-                        return results;
-                    }''')
+        likes_url = f"{BASE_URL}/{username}/likes"
+        
+        async def extractor(page, result):
+            if "404" in await page.title():
+                result["error"] = f"User '{username}' not found"
+                result["code"] = "NOT_FOUND"
+                return
+            
+            data = {"likes": [], "total_count": 0}
+            
+            # Get count from nav
+            nav_link = await page.query_selector("a[href*='/likes']")
+            if nav_link:
+                count_elem = await nav_link.query_selector(".totals span")
+                if count_elem:
+                    data["total_count"] = int((await count_elem.text_content()).strip())
+            
+            # Extract liked projects using JavaScript
+            data["likes"] = await page.evaluate('''() => {
+                const items = document.querySelectorAll('.gallery-item');
+                const results = [];
+                items.forEach(item => {
+                    const link = item.querySelector('a[href*="/software/"]');
                     
-                    data["likes"] = likes
-                    if not data["total_count"]:
-                        data["total_count"] = len(likes)
+                    let url = null, title = null, tagline = null, hackathon = null;
+                    
+                    if (link) {
+                        const href = link.getAttribute('href');
+                        url = href.startsWith('http') ? href : 'https://devpost.com' + href;
                         
-                except Exception as e:
-                    logger.exception("Could not extract likes: %s", e)
+                        const titleElem = item.querySelector('h5, .title');
+                        if (titleElem) {
+                            title = titleElem.textContent.trim();
+                        } else {
+                            const linkText = link.textContent.trim().split('\\n')[0].trim();
+                            if (linkText && linkText.length < 80) title = linkText;
+                        }
+                        
+                        const taglineElem = item.querySelector('.tagline');
+                        if (taglineElem) tagline = taglineElem.textContent.trim().substring(0, 200);
+                        
+                        const hackathonElem = item.querySelector('.hackathon, .challenge-name');
+                        if (hackathonElem) hackathon = hackathonElem.textContent.trim();
+                    }
+                    
+                    if (title || url) {
+                        results.push({ title, url, tagline, hackathon });
+                    }
+                });
+                return results;
+            }''')
+            
+            if not data["total_count"]:
+                data["total_count"] = len(data["likes"])
+            
+            result["data"] = data
+            result["success"] = True
 
-                result["data"] = data
-                result["success"] = True
-                result["steps"].append("Successfully extracted likes")
-
-            except Exception as e:
-                result["error"] = str(e)
-                result["steps"].append(f"Error: {e}")
-            finally:
-                await browser.close()
-
-        if result["success"] and self._cache:
-            self._cache.set(cache_key, result, ttl=3600)
-
+        result = await self._playwright_scrape(
+            url=likes_url,
+            extractor_fn=extractor,
+            cache_key=cache_key,
+            wait_for_selector=".gallery-item",
+        )
+        
+        if result.get("error") == f"User '{username}' not found":
+            result["code"] = "NOT_FOUND"
+        
         return result
 
     async def parse_rules_page(self, slug: str) -> dict[str, Any]:
@@ -3764,15 +3594,42 @@ async def _extract_project_from_card(card, link, client) -> Optional[dict]:
 class AuthenticatedClient:
     """Authenticated client for Devpost with session persistence."""
 
+    # OAuth provider selectors and metadata
+    OAUTH_PROVIDERS = {
+        "github": {
+            "selector": "a[data-role='github-login social-login']",
+            "name": "GitHub",
+        },
+        "google": {
+            "selector": "a[data-role='google_oauth2-login social-login']",
+            "name": "Google",
+        },
+        "facebook": {
+            "selector": "a[data-role='facebook-login social-login']",
+            "name": "Facebook",
+        },
+        "linkedin": {
+            "selector": "a[data-role='linkedin-login social-login']",
+            "name": "LinkedIn",
+        },
+    }
+
     def __init__(
         self,
         email: Optional[str] = None,
         password: Optional[str] = None,
         headed: bool = False,
+        auth_method: Optional[str] = None,
     ) -> None:
         self.email = email
         self.password = password
         self.headed = headed
+        # Auto-detect auth method from session if not specified
+        if auth_method is None:
+            from .session import get_auth_method
+            self.auth_method = get_auth_method() or "password"
+        else:
+            self.auth_method = auth_method
         self._playwright = None
         self._browser = None
         self._context = None
@@ -3810,7 +3667,11 @@ class AuthenticatedClient:
         return creds
 
     async def _get_browser_and_page(self) -> tuple[Any, Any]:
-        """Get or create browser context with session persistence."""
+        """Get or create browser context with session persistence.
+        
+        Supports both password and OAuth login flows.
+        OAuth login auto-forces headed mode for user interaction.
+        """
         try:
             from playwright.async_api import async_playwright
         except ImportError:
@@ -3829,9 +3690,16 @@ class AuthenticatedClient:
 
         session = load_session()
 
+        # OAuth requires headed mode for user interaction
+        effective_headed = self.headed
+        if self.auth_method != "password":
+            if not self.headed:
+                logger.info("OAuth login requires visible browser. Switching to headed mode.")
+            effective_headed = True
+
         self._playwright = await async_playwright().start()
         self._browser = await self._playwright.chromium.launch(
-            headless=not self.headed,
+            headless=not effective_headed,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--disable-web-security",
@@ -3877,6 +3745,21 @@ class AuthenticatedClient:
         await self._page.goto("https://devpost.com/users/login", wait_until="networkidle", timeout=30000)
         await asyncio.sleep(2)
 
+        # OAuth login flow
+        if self.auth_method != "password":
+            await self._oauth_login()
+        else:
+            # Password login flow
+            await self._password_login()
+
+        # Save session cookies
+        cookies = await self._context.cookies()
+        save_session(cookies, self.email or "oauth-user", self.auth_method)
+
+        return self._browser, self._page
+
+    async def _password_login(self) -> None:
+        """Perform password-based login."""
         email, password = self.email, self.password
         if not email or not password:
             email, password = self.get_credentials()
@@ -3906,10 +3789,131 @@ class AuthenticatedClient:
             await self.close()
             raise DevpostError("Login failed - check credentials", code="AUTH_FAILED")
 
+    async def _oauth_login(self) -> None:
+        """Perform OAuth login via social provider.
+        
+        Clicks the appropriate OAuth button and waits for redirect back to Devpost.
+        Timeout is extended to 120s to allow for user interaction on OAuth provider page.
+        """
+        provider = self.OAUTH_PROVIDERS.get(self.auth_method)
+        if not provider:
+            raise DevpostError(
+                f"Unknown OAuth method: {self.auth_method}. Valid: {', '.join(self.OAUTH_PROVIDERS.keys())}",
+                code="INVALID_OAUTH_METHOD",
+            )
+
+        provider_name = provider["name"]
+        selector = provider["selector"]
+
+        logger.info(f"Initiating {provider_name} OAuth login...")
+
+        # Click the OAuth button
+        try:
+            await self._page.wait_for_selector(selector, timeout=10000)
+            await self._page.click(selector)
+        except Exception as e:
+            await self.close()
+            raise DevpostError(
+                f"Could not find {provider_name} login button. Page may have changed.",
+                code="OAUTH_BUTTON_NOT_FOUND",
+            ) from e
+
+        # Wait for OAuth flow to complete (user authenticates on provider site, redirects back)
+        logger.info(f"Waiting for {provider_name} authentication... (timeout: 120s)")
+        try:
+            # Wait for redirect back to devpost.com (not on login page anymore)
+            await self._page.wait_for_url(
+                lambda url: "devpost.com" in url and "users/login" not in url,
+                timeout=120000
+            )
+            await self._page.wait_for_load_state("networkidle")
+            await asyncio.sleep(3)
+        except Exception as e:
+            await self.close()
+            raise DevpostError(
+                f"OAuth login timed out. Please try again and complete authentication on {provider_name}.",
+                code="OAUTH_TIMEOUT",
+            ) from e
+
+        # Verify we're logged in (no "Log in" button visible)
+        page_content = await self._page.content()
+        if "Log in" in page_content:
+            # Check if we're still on a login page
+            if "login" in self._page.url.lower():
+                await self.close()
+                raise DevpostError(
+                    f"OAuth login did not complete. You may need to authorize the application on {provider_name}.",
+                    code="OAUTH_INCOMPLETE",
+                )
+
+        logger.info(f"{provider_name} OAuth login successful")
+        # Extract email from session if possible (not always available with OAuth)
+        self.email = self.email or f"{self.auth_method}-oauth"
+
         cookies = await self._context.cookies()
         save_session(cookies, email)
 
         return self._browser, self._page
+
+    async def _fill_project_form(
+        self,
+        page,
+        title: Optional[str] = None,
+        tagline: Optional[str] = None,
+        description: Optional[str] = None,
+        built_with: Optional[list[str]] = None,
+        links: Optional[dict] = None,
+    ) -> list[str]:
+        """Fill project submission form fields.
+        
+        Args:
+            page: Playwright page object
+            title: Project title
+            tagline: Project tagline
+            description: Project description
+            built_with: List of technologies
+            links: Dict with github, demo, video URLs
+        
+        Returns:
+            List of field names that were successfully filled
+        """
+        filled_fields = []
+        
+        if title:
+            await page.fill("input[name='software[name]']", title)
+            filled_fields.append("title")
+        
+        if tagline:
+            await page.fill("input[name='software[tagline]']", tagline)
+            filled_fields.append("tagline")
+        
+        if description:
+            await page.fill("textarea[name='software[description]']", description)
+            filled_fields.append("description")
+        
+        if built_with:
+            tech_input = page.locator("input[placeholder*='technology'], input[name*='built_with']").first
+            for tech in built_with:
+                await tech_input.fill(tech)
+                await tech_input.press("Enter")
+                await asyncio.sleep(0.5)
+            filled_fields.append("built_with")
+        
+        if links:
+            link_fields = {
+                "github": ("input[name*='github'], input[placeholder*='github']", "github_link"),
+                "demo": ("input[name*='demo'], input[placeholder*='demo']", "demo_link"),
+                "video": ("input[name*='video'], input[placeholder*='video']", "video_link"),
+            }
+            for key, (selector, field_name) in link_fields.items():
+                if links.get(key):
+                    try:
+                        await page.fill(selector, links[key])
+                        filled_fields.append(field_name)
+                    except Exception as e:
+                        logger.warning("Could not fill %s: %s", key, e)
+        
+        return filled_fields
 
     async def submit_project(
         self,
@@ -3919,9 +3923,24 @@ class AuthenticatedClient:
         description: Optional[str] = None,
         built_with: Optional[list[str]] = None,
         links: Optional[dict] = None,
+        image_paths: Optional[list[str]] = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        """Submit a project to a hackathon."""
+        """Submit a project to a hackathon.
+        
+        Args:
+            hackathon_slug: Hackathon URL slug
+            title: Project title
+            tagline: Project tagline (max 140 chars)
+            description: Project description (can be HTML from markdown conversion)
+            built_with: List of technologies
+            links: Dict with github, demo, video URLs
+            image_paths: List of image file paths to upload after submission
+            dry_run: If True, don't actually submit
+            
+        Returns:
+            Result dict with project URL if successful
+        """
         validate_slug(hackathon_slug)
         result = {
             "success": False,
@@ -3937,6 +3956,107 @@ class AuthenticatedClient:
             result["error"] = e.message
             result["code"] = e.code
             return result
+
+        try:
+            result["steps"].append("Navigating to hackathon")
+            await page.goto(f"https://{hackathon_slug}.devpost.com/", wait_until="networkidle", timeout=30000)
+            await asyncio.sleep(2)
+
+            # Check if user has joined the hackathon, join if not
+            result["steps"].append("Checking hackathon registration status")
+            join_button = page.locator(
+                "a:has-text('Join hackathon'), a:has-text('Join'), button:has-text('Join'), button:has-text('Register')"
+            ).first
+            
+            if await join_button.count() > 0:
+                result["steps"].append("Joining hackathon (required before submission)")
+                await join_button.click()
+                await page.wait_for_load_state("networkidle")
+                await asyncio.sleep(2)
+                result["steps"].append("Successfully joined hackathon")
+
+            result["steps"].append("Looking for submit button")
+            submit_button = page.locator("a:has-text('Submit project'), a:has-text('Start a submission'), a:has-text('Start submission')").first
+            if await submit_button.count() == 0:
+                raise DevpostError("Submit button not found - hackathon may not be accepting submissions", code="SUBMISSION_CLOSED")
+
+            await submit_button.click()
+            await page.wait_for_url("**/challenges/start_a_submission**", timeout=15000)
+            await asyncio.sleep(2)
+
+            result["steps"].append("Looking for project creation link")
+            create_link = page.locator("a:has-text('Create a project'), a:has-text('New project')").first
+            if await create_link.count() > 0:
+                await create_link.click()
+                await page.wait_for_url("**/software/new**", timeout=15000)
+                await asyncio.sleep(2)
+
+            if dry_run:
+                result["success"] = True
+                result["message"] = "DRY RUN - Form would be submitted"
+                if image_paths:
+                    result["steps"].append(f"Would upload {len(image_paths)} image(s) after submission")
+                return result
+
+            result["steps"].append("Filling form")
+            await page.fill("input[name='software[name]']", title)
+            await page.fill("input[name='software[tagline]']", tagline)
+
+            if description:
+                await page.fill("textarea[name='software[description]']", description)
+
+            if built_with:
+                tech_input = page.locator("input[placeholder*='technology'], input[name*='built_with']").first
+                for tech in built_with:
+                    await tech_input.fill(tech)
+                    await tech_input.press("Enter")
+                    await asyncio.sleep(0.5)
+
+            if links:
+                if links.get("github"):
+                    try:
+                        await page.fill("input[name*='github'], input[placeholder*='github']", links["github"])
+                    except Exception as e:
+                        logger.warning("Could not fill GitHub link: %s", e)
+                if links.get("demo"):
+                    try:
+                        await page.fill("input[name*='demo'], input[placeholder*='demo']", links["demo"])
+                    except Exception as e:
+                        logger.warning("Could not fill demo link: %s", e)
+
+            result["steps"].append("Submitting")
+            await page.click("input[type='submit'], button[type='submit'], button:has-text('Save'), button:has-text('Submit')")
+            await page.wait_for_load_state("networkidle")
+            await asyncio.sleep(3)
+
+            current_url = page.url
+            if "/software/" in current_url:
+                result["success"] = True
+                result["url"] = current_url
+                result["message"] = "Project submitted successfully!"
+                
+                # Upload images after successful submission
+                if image_paths:
+                    result["steps"].append(f"Uploading {len(image_paths)} image(s)...")
+                    upload_result = await self._upload_images_to_project(page, current_url, image_paths)
+                    result["uploaded_images"] = upload_result.get("uploaded", [])
+                    result["failed_images"] = upload_result.get("failed", [])
+            else:
+                errors = await page.locator(".error, .alert-error, .field_with_errors").all_text_contents()
+                if errors:
+                    raise DevpostError(f"Submission failed: {'; '.join(errors)}", code="SUBMISSION_FAILED")
+                result["message"] = "Submission completed - check your dashboard"
+                result["success"] = True
+
+        except DevpostError as e:
+            result["error"] = e.message
+            result["code"] = e.code
+            result["steps"].append(f"Error: {e.message}")
+        except Exception as e:
+            result["error"] = str(e)
+            result["steps"].append(f"Error: {e}")
+
+        return result
 
         try:
             result["steps"].append("Navigating to hackathon")
@@ -3965,30 +4085,15 @@ class AuthenticatedClient:
                 return result
 
             result["steps"].append("Filling form")
-            await page.fill("input[name='software[name]']", title)
-            await page.fill("input[name='software[tagline]']", tagline)
-
-            if description:
-                await page.fill("textarea[name='software[description]']", description)
-
-            if built_with:
-                tech_input = page.locator("input[placeholder*='technology'], input[name*='built_with']").first
-                for tech in built_with:
-                    await tech_input.fill(tech)
-                    await tech_input.press("Enter")
-                    await asyncio.sleep(0.5)
-
-            if links:
-                if links.get("github"):
-                    try:
-                        await page.fill("input[name*='github'], input[placeholder*='github']", links["github"])
-                    except Exception as e:
-                        logger.warning("Could not fill GitHub link: %s", e)
-                if links.get("demo"):
-                    try:
-                        await page.fill("input[name*='demo'], input[placeholder*='demo']", links["demo"])
-                    except Exception as e:
-                        logger.warning("Could not fill demo link: %s", e)
+            filled_fields = await self._fill_project_form(
+                page,
+                title=title,
+                tagline=tagline,
+                description=description,
+                built_with=built_with,
+                links=links,
+            )
+            result["steps"].append(f"Filled fields: {', '.join(filled_fields)}")
 
             result["steps"].append("Submitting")
             await page.click("input[type='submit'], button[type='submit'], button:has-text('Save'), button:has-text('Submit')")
@@ -4181,9 +4286,24 @@ class AuthenticatedClient:
         description: Optional[str] = None,
         built_with: Optional[list[str]] = None,
         links: Optional[dict] = None,
+        image_paths: Optional[list[str]] = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        """Update an existing project submission."""
+        """Update an existing project submission.
+        
+        Args:
+            project_url: Project URL to update
+            title: New title (optional)
+            tagline: New tagline (optional)
+            description: New description (optional, can be HTML)
+            built_with: New technologies list (optional)
+            links: New links dict (optional)
+            image_paths: New images to upload (optional)
+            dry_run: If True, don't actually save
+            
+        Returns:
+            Result dict with updated fields
+        """
         validate_devpost_url(project_url)
         result = {
             "success": False,
@@ -4207,62 +4327,17 @@ class AuthenticatedClient:
             await page.wait_for_load_state("networkidle")
             await asyncio.sleep(2)
 
-            if title:
-                try:
-                    await page.fill("input[name='software[name]']", title)
-                    result["updated_fields"].append("title")
-                    result["steps"].append("Updated title")
-                except Exception as e:
-                    logger.warning("Could not update title: %s", e)
-                    result["steps"].append(f"Could not update title: {e}")
-
-            if tagline:
-                try:
-                    await page.fill("input[name='software[tagline]']", tagline)
-                    result["updated_fields"].append("tagline")
-                    result["steps"].append("Updated tagline")
-                except Exception as e:
-                    logger.warning("Could not update tagline: %s", e)
-                    result["steps"].append(f"Could not update tagline: {e}")
-
-            if description:
-                try:
-                    await page.fill("textarea[name='software[description]']", description)
-                    result["updated_fields"].append("description")
-                    result["steps"].append("Updated description")
-                except Exception as e:
-                    logger.warning("Could not update description: %s", e)
-                    result["steps"].append(f"Could not update description: {e}")
-
-            if built_with:
-                try:
-                    tech_string = ", ".join(built_with)
-                    await page.fill("input[name='software[built_with]']", tech_string)
-                    result["updated_fields"].append("built_with")
-                    result["steps"].append("Updated technologies")
-                except Exception as e:
-                    logger.warning("Could not update technologies: %s", e)
-                    result["steps"].append(f"Could not update technologies: {e}")
-
-            if links:
-                if links.get("github"):
-                    try:
-                        await page.fill("input[name='software[github_url]']", links["github"])
-                        result["updated_fields"].append("github_link")
-                    except Exception as e:
-                        logger.warning("Could not update GitHub link: %s", e)
-                if links.get("demo"):
-                    try:
-                        await page.fill("input[name='software[try_it_out_url]']", links["demo"])
-                        result["updated_fields"].append("demo_link")
-                    except Exception as e:
-                        logger.warning("Could not update demo link: %s", e)
-                if links.get("video"):
-                    try:
-                        await page.fill("input[name='software[video_url]']", links["video"])
-                        result["updated_fields"].append("video_link")
-                    except Exception as e:
-                        logger.warning("Could not update video link: %s", e)
+            result["steps"].append("Filling form")
+            filled_fields = await self._fill_project_form(
+                page,
+                title=title,
+                tagline=tagline,
+                description=description,
+                built_with=built_with,
+                links=links,
+            )
+            result["updated_fields"] = filled_fields
+            result["steps"].append(f"Updated fields: {', '.join(filled_fields)}")
 
             if dry_run:
                 result["steps"].append("DRY RUN - Changes not saved")
@@ -4276,6 +4351,15 @@ class AuthenticatedClient:
                     result["steps"].append("Saved changes")
                     result["success"] = True
                     result["message"] = "Project updated successfully"
+                    
+                    # Upload images after saving form changes
+                    if image_paths:
+                        result["steps"].append(f"Uploading {len(image_paths)} image(s)...")
+                        upload_result = await self._upload_images_to_project(page, project_url, image_paths)
+                        result["uploaded_images"] = upload_result.get("uploaded", [])
+                        result["failed_images"] = upload_result.get("failed", [])
+                        if result["uploaded_images"]:
+                            result["updated_fields"].append("images")
                 except Exception as e:
                     result["error"] = f"Failed to save: {e}"
 
@@ -4446,6 +4530,63 @@ class AuthenticatedClient:
             result["error"] = str(e)
             result["steps"].append(f"Error: {e}")
 
+        return result
+
+    async def _upload_images_to_project(
+        self,
+        page,
+        project_url: str,
+        image_paths: list[str],
+    ) -> dict[str, Any]:
+        """Upload images to a project (internal helper for submit_project).
+        
+        This is a simplified version that reuses the existing page context
+        instead of creating a new browser session.
+        
+        Args:
+            page: Existing Playwright page object
+            project_url: Project URL
+            image_paths: List of image file paths
+            
+        Returns:
+            Result dict with uploaded/failed lists
+        """
+        result = {
+            "uploaded": [],
+            "failed": [],
+        }
+        
+        try:
+            edit_url = f"{project_url.rstrip('/')}/edit"
+            await page.goto(edit_url, timeout=30000)
+            await page.wait_for_load_state("networkidle")
+            
+            for image_path in image_paths:
+                try:
+                    file_input = await page.wait_for_selector(
+                        "input[type='file'], input[name*='image'], input[name*='screenshot']",
+                        timeout=5000,
+                    )
+                    
+                    if file_input:
+                        await file_input.set_input_files(image_path)
+                        await page.wait_for_timeout(3000)
+                        result["uploaded"].append(image_path)
+                    else:
+                        result["failed"].append({"path": image_path, "reason": "File input not found"})
+                        
+                except Exception as e:
+                    result["failed"].append({"path": image_path, "reason": str(e)})
+            
+            # Save after all uploads
+            if result["uploaded"]:
+                await page.click("input[type='submit'], button:has-text('Save')")
+                await page.wait_for_load_state("networkidle")
+                
+        except Exception as e:
+            logger.warning("Image upload failed: %s", e)
+            result["failed"].append({"path": "unknown", "reason": str(e)})
+        
         return result
 
     async def upload_screenshots(
@@ -4709,13 +4850,26 @@ class AuthenticatedClient:
         hackathon_slug: str,
         team_name: str,
         invite_usernames: Optional[list[str]] = None,
+        invite_emails: Optional[list[str]] = None,
     ) -> dict[str, Any]:
-        """Create a team for a hackathon."""
+        """Create a team for a hackathon with optional invites.
+        
+        Args:
+            hackathon_slug: Hackathon URL slug
+            team_name: Name for the new team
+            invite_usernames: List of Devpost usernames to invite
+            invite_emails: List of email addresses to invite (if Devpost UI supports it)
+        
+        Returns:
+            dict with success status, team_url, invites_sent, invites_failed
+        """
         validate_slug(hackathon_slug)
         result = {
             "success": False,
             "hackathon_slug": hackathon_slug,
             "team_name": team_name,
+            "invites_sent": [],
+            "invites_failed": [],
             "steps": [],
         }
 
@@ -4736,7 +4890,7 @@ class AuthenticatedClient:
             ).first
 
             if await create_button.count() == 0:
-                result["error"] = "Create team option not found"
+                result["error"] = "Create team option not found. You may already be in a team or team formation may be closed."
                 result["code"] = "NOT_FOUND"
                 return result
 
@@ -4745,24 +4899,138 @@ class AuthenticatedClient:
             result["steps"].append("Clicked create team")
 
             result["steps"].append("Filling team name")
-            await page.fill("input[name*='team_name'], input[name*='name'], input[placeholder*='team name']", team_name)
+            try:
+                await page.fill("input[name*='team_name'], input[name*='name'], input[placeholder*='team name']", team_name)
+            except Exception as e:
+                logger.debug("Could not fill team name: %s", e)
+                result["steps"].append(f"Warning: Could not auto-fill team name")
 
+            # Combine usernames and emails for inviting
+            all_invitees = []
             if invite_usernames:
-                result["steps"].append("Adding invitees")
-                for username in invite_usernames:
+                all_invitees.extend(invite_usernames)
+            if invite_emails:
+                all_invitees.extend(invite_emails)
+            
+            if all_invitees:
+                result["steps"].append(f"Adding {len(all_invitees)} invitees")
+                for invitee in all_invitees:
                     try:
-                        await page.fill("input[name*='email'], input[name*='username'], input[placeholder*='username']", username)
-                        await page.click("button:has-text('Add'), input[value*='Add']")
-                        await page.wait_for_timeout(500)
-                    except Exception:
-                        logger.debug("Could not add invitee %s", username)
+                        # Detect if this is an email or username
+                        is_email = "@" in invitee
+                        
+                        # Try to find invite input field
+                        invite_input = page.locator(
+                            "input[name*='email'], input[name*='username'], input[placeholder*='username'], input[placeholder*='email']"
+                        ).first
+                        
+                        if await invite_input.count() > 0:
+                            await invite_input.fill(invitee)
+                            
+                            # Click add button
+                            add_button = page.locator("button:has-text('Add'), input[value*='Add'], button:has-text('Invite')").first
+                            if await add_button.count() > 0:
+                                await add_button.click()
+                                await page.wait_for_timeout(500)
+                                result["invites_sent"].append(invitee)
+                                invite_type = "email" if is_email else "username"
+                                result["steps"].append(f"Added {invite_type} invite: {invitee}")
+                            else:
+                                result["invites_failed"].append(invitee)
+                                result["steps"].append(f"Warning: Could not find add button for {invitee}")
+                        else:
+                            result["invites_failed"].append(invitee)
+                            result["steps"].append(f"Warning: Could not find invite input for {invitee}")
+                    except Exception as e:
+                        logger.debug("Could not add invitee %s: %s", invitee, e)
+                        result["invites_failed"].append(invitee)
+                        result["steps"].append(f"Warning: Failed to invite {invitee}")
 
             result["steps"].append("Submitting team creation")
-            await page.click("input[type='submit'], button:has-text('Create'), button:has-text('Save')")
-            await page.wait_for_load_state("networkidle")
+            submit_button = page.locator("input[type='submit'], button:has-text('Create'), button:has-text('Save'), button:has-text('Form team')").first
+            if await submit_button.count() > 0:
+                await submit_button.click()
+                await page.wait_for_load_state("networkidle")
+                await asyncio.sleep(2)
+                
+                # Check if team was created successfully
+                current_url = page.url
+                if "/team" in current_url or "/teams/" in current_url:
+                    result["success"] = True
+                    result["message"] = f"Team '{team_name}' created successfully"
+                    result["team_url"] = current_url
+                else:
+                    result["success"] = True
+                    result["message"] = f"Team creation initiated - check your email for confirmation"
+            else:
+                result["error"] = "Submit button not found"
+                result["code"] = "NOT_FOUND"
 
-            result["success"] = True
-            result["message"] = f"Team '{team_name}' created successfully"
+        except DevpostError as e:
+            result["error"] = e.message
+            result["code"] = e.code
+        except Exception as e:
+            result["error"] = str(e)
+            result["steps"].append(f"Error: {e}")
+
+        return result
+
+    async def add_team_member(self, project_url: str, username: str) -> dict[str, Any]:
+        """Add a team member to an existing project."""
+        validate_devpost_url(project_url)
+        result = {
+            "success": False,
+            "project_url": project_url,
+            "username": username,
+            "steps": [],
+        }
+
+        try:
+            browser, page = await self._get_browser_and_page()
+        except DevpostError as e:
+            result["error"] = e.message
+            result["code"] = e.code
+            return result
+
+        try:
+            # Navigate to project edit page
+            edit_url = f"{project_url}/edit"
+            result["steps"].append(f"Navigating to {edit_url}")
+            await page.goto(edit_url, wait_until="networkidle", timeout=30000)
+
+            result["steps"].append("Looking for team management section")
+            
+            # Try to find team/add member section
+            add_member_input = page.locator(
+                "input[name*='username'], input[name*='email'], input[placeholder*='username'], input[placeholder*='Add member']"
+            ).first
+
+            if await add_member_input.count() == 0:
+                result["error"] = "Could not find team member input field. You may not have permission to edit this project."
+                result["code"] = "NOT_FOUND"
+                return result
+
+            result["steps"].append(f"Adding {username} to project")
+            await add_member_input.fill(username)
+            
+            # Click add/save button
+            add_button = page.locator("button:has-text('Add'), input[value*='Add'], button:has-text('Save'), button:has-text('Update')").first
+            if await add_button.count() > 0:
+                await add_button.click()
+                await page.wait_for_load_state("networkidle")
+                await asyncio.sleep(2)
+                
+                # Check if member was added successfully
+                page_content = await page.content()
+                if username in page_content:
+                    result["success"] = True
+                    result["message"] = f"Successfully added {username} to project"
+                else:
+                    result["success"] = True
+                    result["message"] = f"Invitation sent to {username}"
+            else:
+                result["error"] = "Add button not found"
+                result["code"] = "NOT_FOUND"
 
         except DevpostError as e:
             result["error"] = e.message

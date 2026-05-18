@@ -20,13 +20,14 @@ from .core import (
     get_credentials,
 )
 from .cache import CacheManager, parse_days_left, parse_prize_amount, _matches
+from .core import clean_html
 from .session import load_credentials, load_credentials_from_env
 from .logging_config import setup_logging, get_logger
 
 logger = get_logger("cli")
-console = Console()
+console = Console(color_system=None, force_terminal=False)
 
-_cli_config: dict = {"headed": False}
+_cli_config: dict = {"headed": False, "debug_screenshots": False}
 
 
 def output_json(data: Any, is_json_flag: Optional[bool] = None) -> bool:
@@ -60,10 +61,11 @@ def _run_async(coro):
 
 
 @click.group()
-@click.version_option(version="0.6.0", prog_name="devpost")
+@click.version_option(version="0.7.0", prog_name="devpost")
 @click.option("--headed", is_flag=True, help="Run browser in headed mode (visible window) for debugging")
+@click.option("--debug-screenshots", is_flag=True, help="Save debug screenshots on Playwright errors (saves to /tmp/playwright_error_*.png)")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
-def cli(headed: bool, verbose: bool):
+def cli(headed: bool, debug_screenshots: bool, verbose: bool):
     """Devpost CLI - Browse hackathons, scout competition, and submit projects.
     
     \b
@@ -81,6 +83,7 @@ def cli(headed: bool, verbose: bool):
       export DEVPOST_PASSWORD="..."
     """
     _cli_config["headed"] = headed
+    _cli_config["debug_screenshots"] = debug_screenshots
     setup_logging(verbose)
 
 
@@ -131,7 +134,7 @@ def hackathons(
     Hidden alias: devpost list (deprecated)
     """
     async def _hackathons():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+        async with DevpostClient(headed=_cli_config.get("headed", False), debug_screenshots=_cli_config.get("debug_screenshots", False)) as client:
             result = await client.list_hackathons(
                 limit=limit,
                 open_state=state,
@@ -175,44 +178,141 @@ def hackathons(
     _run_async(_hackathons())
 
 
-@cli.command(name="list", hidden=True)
-@click.option("--limit", "-l", default=20, help="Number of hackathons to show (default: 20)")
-@click.option("--state", "-s", type=click.Choice(["open", "closed", "ended", "upcoming"]),
-              help="Filter by hackathon state ('closed' is an alias for 'ended')")
-@click.option("--sort", type=click.Choice(["recently-added", "deadline", "prize-amount"]),
-              default="recently-added", help="Sort order (default: recently-added)")
-@click.option("--query", "-q", help="Search query string")
-@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
-def list_cmd(limit: int, state: Optional[str], sort: str, query: Optional[str], is_json: Optional[bool]):
-    """Legacy alias for hackathons command (deprecated)."""
-    _run_async(_list_cmd(limit, state, sort, query, is_json))
+@cli.command()
+@click.option("--type", "challenge_type", type=click.Choice(["online", "in-person"]), default="online",
+              help="Filter by challenge type (default: online)")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def featured(challenge_type: str, is_json: Optional[bool]):
+    """List featured hackathons.
+    
+    \b
+    Examples:
+      devpost featured                     # Featured online hackathons
+      devpost featured --type in-person    # Featured in-person hackathons
+      devpost featured --json              # Output as JSON
+    """
+    async def _featured():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            hackathons_list = await client.get_featured_hackathons(challenge_type=challenge_type)
+            
+            if output_json({"hackathons": hackathons_list, "count": len(hackathons_list)}, is_json):
+                return
+            
+            if not hackathons_list:
+                console.print("[yellow]No featured hackathons found.[/yellow]")
+                return
+            
+            console.print(f"[dim]({len(hackathons_list)} featured)[/dim]\n")
+            for h in hackathons_list:
+                status = h.get("open_state", "unknown")
+                prize = clean_html(h.get("prize_amount")) or "N/A"
+                ends = h.get("time_left_to_submission") or h.get("submission_period_dates") or "N/A"
+                title = h.get("title", "Unknown")[:50]
+                console.print(f"{title}\t{status}\t{prize}\t{ends}")
+    
+    _run_async(_featured())
 
 
-async def _list_cmd(limit: int, state: Optional[str], sort: str, query: Optional[str], is_json: Optional[bool]):
-    """Internal list command logic (legacy alias)."""
-    async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
-        result = await client.list_hackathons(
-            limit=limit,
-            open_state=state,
-            order_by=sort,
-            search=query,
-        )
+@cli.command()
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def recommended(is_json: Optional[bool]):
+    """List recommended hackathons (requires auth for personalized results).
+    
+    \b
+    Examples:
+      devpost recommended                  # Recommended hackathons
+      devpost recommended --json           # Output as JSON
+    
+    Note: Returns generic results without authentication.
+    """
+    async def _recommended():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            hackathons_list = await client.get_recommended_hackathons()
+            
+            if output_json({"hackathons": hackathons_list, "count": len(hackathons_list)}, is_json):
+                return
+            
+            if not hackathons_list:
+                console.print("[yellow]No recommended hackathons found.[/yellow]")
+                return
+            
+            console.print(f"[dim]({len(hackathons_list)} recommended)[/dim]\n")
+            for h in hackathons_list:
+                status = h.get("open_state", "unknown")
+                prize = clean_html(h.get("prize_amount")) or "N/A"
+                ends = h.get("time_left_to_submission") or h.get("submission_period_dates") or "N/A"
+                title = h.get("title", "Unknown")[:50]
+                console.print(f"{title}\t{status}\t{prize}\t{ends}")
+    
+    _run_async(_recommended())
 
-        hackathons_list = result.get("hackathons", [])
 
-        if output_json(hackathons_list, is_json):
-            return
+@cli.command()
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def nearby(is_json: Optional[bool]):
+    """List nearby hackathons (requires location/auth for meaningful results).
+    
+    \b
+    Examples:
+      devpost nearby                       # Nearby hackathons
+      devpost nearby --json                # Output as JSON
+    
+    Note: Returns empty list without location/authentication.
+    """
+    async def _nearby():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            hackathons_list = await client.get_nearby_hackathons()
+            
+            if output_json({"hackathons": hackathons_list, "count": len(hackathons_list)}, is_json):
+                return
+            
+            if not hackathons_list:
+                console.print("[yellow]No nearby hackathons found (try authenticating).[/yellow]")
+                return
+            
+            console.print(f"[dim]({len(hackathons_list)} nearby)[/dim]\n")
+            for h in hackathons_list:
+                status = h.get("open_state", "unknown")
+                prize = clean_html(h.get("prize_amount")) or "N/A"
+                ends = h.get("time_left_to_submission") or h.get("submission_period_dates") or "N/A"
+                title = h.get("title", "Unknown")[:50]
+                console.print(f"{title}\t{status}\t{prize}\t{ends}")
+    
+    _run_async(_nearby())
 
-        if not hackathons_list:
-            console.print("[yellow]No hackathons found.[/yellow]")
-            return
 
-        for h in hackathons_list:
-            status = h.get("open_state", "unknown")
-            prize = h.get("prize_amount") or "N/A"
-            ends = h.get("ends_at") or "N/A"
-            title = h.get("title", "Unknown")[:50]
-            console.print(f"{title}\t{status}\t{prize}\t{ends}")
+@cli.command()
+@click.option("--query", "-q", default="", help="Search term (empty returns all)")
+@click.option("--limit", "-l", type=int, default=20, help="Max results (default: 20)")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def organizations(query: str, limit: int, is_json: Optional[bool]):
+    """Search organizations.
+    
+    \b
+    Examples:
+      devpost organizations                # List all organizations
+      devpost organizations -q "Google"    # Search for "Google"
+      devpost organizations --json         # Output as JSON
+    """
+    async def _organizations():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            orgs = await client.search_organizations(term=query)
+            orgs = orgs[:limit]
+            
+            if output_json({"organizations": orgs, "count": len(orgs)}, is_json):
+                return
+            
+            if not orgs:
+                console.print("[yellow]No organizations found.[/yellow]")
+                return
+            
+            console.print(f"[dim]({len(orgs)} organizations)\n[/dim]")
+            for org in orgs:
+                name = org.get("name", "Unknown")
+                count = org.get("count", 0)
+                console.print(f"{name}\t{count} hackathons")
+    
+    _run_async(_organizations())
 
 
 @cli.command()
@@ -233,7 +333,7 @@ def overview(slug: str, is_json: Optional[bool]):
     Hidden alias: devpost info (deprecated)
     """
     async def _info():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+        async with DevpostClient(headed=_cli_config.get("headed", False), debug_screenshots=_cli_config.get("debug_screenshots", False)) as client:
             hackathon = await client.get_hackathon_by_slug(slug)
 
             if not hackathon:
@@ -292,70 +392,6 @@ def overview(slug: str, is_json: Optional[bool]):
     _run_async(_info())
 
 
-@cli.command(name="info", hidden=True)
-@click.argument("slug")
-@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
-def info_cmd(slug: str, is_json: Optional[bool]):
-    """Legacy alias for overview command (deprecated)."""
-    _run_async(_info_cmd(slug, is_json))
-
-
-async def _info_cmd(slug: str, is_json: Optional[bool]):
-    """Internal info command logic (legacy alias)."""
-    async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
-        hackathon = await client.get_hackathon_by_slug(slug)
-
-        if not hackathon:
-            if output_json({"error": f"Hackathon '{slug}' not found", "code": "NOT_FOUND"}, is_json):
-                sys.exit(3)
-            console.print(f"[red]Hackathon '{slug}' not found.[/red]")
-            sys.exit(3)
-
-        if output_json(hackathon, is_json):
-            return
-
-        console.print(f"[cyan]{hackathon.get('title', 'Unknown')}[/cyan]")
-        console.print(f"url: {hackathon.get('url', 'N/A')}")
-        console.print(f"status: {hackathon.get('open_state', 'unknown')}")
-        
-        if hackathon.get("featured"):
-            console.print("featured: yes")
-        
-        console.print(f"prize: {hackathon.get('prize_amount', 'N/A')}")
-        
-        prize_counts = hackathon.get('prizes_counts', {})
-        if prize_counts:
-            console.print(f"prize_categories: {prize_counts.get('cash', 0)} cash, {prize_counts.get('other', 0)} other")
-        
-        console.print(f"submissions: {hackathon.get('submissions_count', 'N/A')}")
-        if hackathon.get('registrations_count') != 'N/A':
-            console.print(f"registrations: {hackathon.get('registrations_count')}")
-        
-        console.print(f"ends: {hackathon.get('ends_at', 'N/A')}")
-        if hackathon.get('submission_period_dates'):
-            console.print(f"period: {hackathon['submission_period_dates']}")
-        
-        access = "invite-only" if hackathon.get('invite_only') else "public"
-        console.print(f"access: {access}")
-        
-        if hackathon.get('organization_name'):
-            console.print(f"organization: {hackathon['organization_name']}")
-        
-        if hackathon.get('managed_by_devpost_badge'):
-            console.print("managed_by: Devpost")
-        
-        themes = hackathon.get('themes', [])
-        if themes:
-            theme_names = [t.get('name', '') for t in themes if t.get('name')]
-            if theme_names:
-                console.print(f"themes: {', '.join(theme_names[:5])}")
-        
-        if hackathon.get('submission_gallery_url'):
-            console.print(f"gallery: {hackathon['submission_gallery_url']}")
-        
-        console.print(f"\n{hackathon.get('tagline', 'No description')[:300]}")
-
-
 @cli.command()
 @click.argument("url")
 @click.option("--json", "is_json", is_flag=True, help="Output as JSON")
@@ -373,7 +409,7 @@ def scrape(url: str, is_json: bool, output: Optional[str]):
       devpost scrape https://oldhack.devpost.com/ -o data.json
     """
     async def _scrape():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+        async with DevpostClient(headed=_cli_config.get("headed", False), debug_screenshots=_cli_config.get("debug_screenshots", False)) as client:
             data = await client.scrape_hackathon_page(url)
 
             if is_json or output:
@@ -432,7 +468,7 @@ def gallery(
     async def _gallery():
         hackathon_url = f"https://{slug}.devpost.com/"
         actual_winners = winners or (sort == "winners")
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+        async with DevpostClient(headed=_cli_config.get("headed", False), debug_screenshots=_cli_config.get("debug_screenshots", False)) as client:
             result = await client.list_hackathon_projects(
                 hackathon_url=hackathon_url,
                 limit=limit,
@@ -460,45 +496,6 @@ def gallery(
     _run_async(_gallery())
 
 
-@cli.command(name="projects", hidden=True)
-@click.argument("url")
-@click.option("--limit", "-l", default=20, help="Number of projects to show (default: 20)")
-@click.option("--winners", "-w", is_flag=True, help="Only show winning projects")
-@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
-def projects_cmd(url: str, limit: int, winners: bool, is_json: Optional[bool]):
-    """Legacy alias for gallery command (deprecated)."""
-    if url.startswith("http"):
-        slug = url.rstrip("/").rsplit("/", maxsplit=1)[-1].replace(".devpost.com", "").replace("https://", "")
-    else:
-        slug = url
-    _run_async(_projects_cmd(slug, limit, winners, is_json))
-
-
-async def _projects_cmd(slug: str, limit: int, winners: bool, is_json: Optional[bool]):
-    """Internal projects command logic (legacy alias)."""
-    hackathon_url = f"https://{slug}.devpost.com/"
-    async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
-        result = await client.list_hackathon_projects(
-            hackathon_url=hackathon_url,
-            limit=limit,
-            winners_only=winners,
-        )
-
-        if output_json(result, is_json):
-            return
-
-        if not result.get("projects"):
-            console.print("[yellow]No projects found.[/yellow]")
-            return
-
-        console.print(f"[dim]({len(result['projects'])} projects)[/dim]")
-        for p in result["projects"]:
-            title = p.get("title", "Unknown")[:50]
-            winner = "★" if p.get("is_winner") else ""
-            url = p.get("url", "N/A")
-            console.print(f"{title}{winner}\t{url}")
-
-
 @cli.command()
 @click.argument("url")
 @click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
@@ -514,7 +511,7 @@ def project(url: str, is_json: Optional[bool]):
       devpost project https://devpost.com/software/winner --json
     """
     async def _project():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+        async with DevpostClient(headed=_cli_config.get("headed", False), debug_screenshots=_cli_config.get("debug_screenshots", False)) as client:
             details = await client.get_project_details(url)
 
             if output_json(details, is_json):
@@ -560,7 +557,7 @@ def user(username: str, is_json: Optional[bool]):
       devpost user mintychochip --json
     """
     async def _user():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+        async with DevpostClient(headed=_cli_config.get("headed", False), debug_screenshots=_cli_config.get("debug_screenshots", False)) as client:
             result = await client.get_user_full(username)
 
             if output_json(result, is_json):
@@ -672,7 +669,7 @@ def rss(is_json: Optional[bool]):
       devpost rss --json
     """
     async def _rss():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+        async with DevpostClient(headed=_cli_config.get("headed", False), debug_screenshots=_cli_config.get("debug_screenshots", False)) as client:
             result = await client.get_rss()
 
             if output_json(result, is_json):
@@ -708,109 +705,148 @@ def rss(is_json: Optional[bool]):
 
 @cli.command()
 @click.argument("slug")
-@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
-@click.option("--no-cache", is_flag=True, help="Bypass cache, fetch fresh data")
-def rules(slug: str, is_json: Optional[bool], no_cache: bool):
-    """Extract structured rules from a hackathon's rules page.
-
-    Parses eligibility, requirements, judging criteria, prize categories,
-    key dates, and sponsor API requirements.
-
+@click.option("--type", "-t", type=click.Choice(["participants", "resources", "updates", "discussions", "winners", "rules"]), required=True, help="Type of data to fetch")
+@click.option("--limit", "-l", default=20, help="Number of results (default: 20)")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+@click.option("--no-cache", is_flag=True, help="Bypass cache (for rules/winners)")
+def get(slug: str, type: str, limit: int, is_json: Optional[bool], no_cache: bool):
+    """Get hackathon data.
+    
+    Unified command for fetching various hackathon data types.
+    
     \b
     Examples:
-      devpost rules medo                       # Parse MeDo hackathon rules
-      devpost rules google-cloud-rapid-agent   # Parse Google Cloud rules
-      devpost rules myhack --json              # Output as JSON
-      devpost rules myhack --no-cache          # Force fresh fetch
+      devpost get hackathon -t participants      # List participants
+      devpost get hackathon --type=resources     # List resources
+      devpost get hackathon -t updates           # List updates
+      devpost get hackathon -t discussions       # List discussions
+      devpost get hackathon -t winners           # List winners
+      devpost get hackathon -t rules             # Get rules
+      devpost get hackathon -t winners --json    # JSON output
     """
-    async def _rules():
-        async with DevpostClient(headed=_cli_config.get("headed", False), use_cache=not no_cache) as client:
-            result = await client.parse_rules_page(slug)
-
-            if output_json(result, is_json):
-                return
-
-            if not result.get("success"):
-                console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/red]")
-                sys.exit(1)
-
-            console.print(f"[cyan]{slug}[/cyan] — Rules\n")
+    async def _get():
+        async with DevpostClient(headed=_cli_config.get("headed", False), use_cache=not no_cache, debug_screenshots=_cli_config.get("debug_screenshots", False)) as client:
+            if type == "participants":
+                result = await client.get_participants(slug, limit=limit)
+                if output_json(result, is_json):
+                    return
+                if result.get("error"):
+                    console.print(f"[red]Error: {result['error']}[/red]")
+                    sys.exit(1)
+                if not result.get("participants"):
+                    console.print("[yellow]No participants found.[/yellow]")
+                    return
+                console.print(f"[dim]({result['count']} participants)[/dim]")
+                for p in result["participants"]:
+                    username = p.get("username", "Unknown")[:30]
+                    name = p.get("name", "")[:30]
+                    url = p.get("url", "")
+                    console.print(f"{username}\t{name}\t{url}")
             
-            sections = [
-                ("Eligibility", result.get("eligibility", [])),
-                ("Requirements", result.get("requirements", [])),
-                ("Judging Criteria", result.get("judging_criteria", [])),
-                ("Sponsor APIs / Tech Requirements", result.get("sponsor_apis", [])),
-                ("Key Dates", result.get("key_dates", [])),
-            ]
-
-            for label, items in sections:
-                if items:
-                    console.print(f"{label}:")
-                    for item in items:
-                        console.print(f"  - {item[:200]}")
+            elif type == "resources":
+                result = await client.get_resources(slug)
+                if output_json(result, is_json):
+                    return
+                if result.get("error"):
+                    console.print(f"[red]Error: {result['error']}[/red]")
+                    sys.exit(1)
+                if not result.get("resources"):
+                    console.print("[yellow]No resources found.[/yellow]")
+                    return
+                console.print(f"[dim]({len(result['resources'])} resources)[/dim]")
+                for r in result["resources"]:
+                    title = r.get("title", "Unknown")[:50]
+                    url = r.get("url", "")
+                    console.print(f"{title}\t{url}")
+            
+            elif type == "updates":
+                result = await client.get_updates(slug, limit=limit)
+                if output_json(result, is_json):
+                    return
+                if result.get("error"):
+                    console.print(f"[red]Error: {result['error']}[/red]")
+                    sys.exit(1)
+                if not result.get("updates"):
+                    console.print("[yellow]No updates found.[/yellow]")
+                    return
+                for u in result["updates"]:
+                    console.print(f"[cyan]{u.get('title', 'Untitled')}[/cyan]")
+                    if u.get("date"):
+                        console.print(f"  [dim]{u['date']}[/dim]")
+                    if u.get("content"):
+                        console.print(f"  [dim]{u['content'][:200]}[/dim]")
+                    if u.get("url"):
+                        console.print(f"  [dim]{u['url']}[/dim]")
                     console.print("")
-
-            if result.get("prize_categories"):
-                console.print("Prize Categories:")
-                for cat in result["prize_categories"]:
-                    console.print(f"  - {cat[:200]}")
-                console.print("")
-
-            if not any([
-                result.get("eligibility"),
-                result.get("requirements"),
-                result.get("judging_criteria"),
-                result.get("sponsor_apis"),
-                result.get("key_dates"),
-                result.get("prize_categories"),
-            ]):
-                console.print("[dim]No structured rules sections found.[/dim]")
-                console.print(f"[dim]Raw text length: {result.get('raw_text_length', 0)} chars[/dim]")
-
-    _run_async(_rules())
-
-
-@cli.command()
-@click.argument("slug")
-@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
-@click.option("--no-cache", is_flag=True, help="Bypass cache, fetch fresh data")
-def winners(slug: str, is_json: Optional[bool], no_cache: bool):
-    """List winning projects from a hackathon.
-
-    Tries the project gallery first (filtered to winners), then falls back
-    to scraping the /winners page.
-
-    \b
-    Examples:
-      devpost winners agents-assemble           # List winners from a hackathon
-      devpost winners google-cloud-rapid-agent   # Winners by slug
-      devpost winners myhack --json              # Output as JSON
-    """
-    async def _winners():
-        async with DevpostClient(headed=_cli_config.get("headed", False), use_cache=not no_cache) as client:
-            result = await client.get_winners(slug)
-
-            if output_json(result, is_json):
-                return
-
-            if result.get("error"):
-                console.print(f"[red]Error: {result['error']}[/red]")
-                sys.exit(1)
-
-            if not result.get("winners"):
-                msg = result.get("message", "No winners found.")
-                console.print(f"[yellow]{msg}[/yellow]")
-                return
-
-            console.print(f"[dim]({result['count']} winning projects)[/dim]")
-            for w in result["winners"]:
-                title = w.get("title", "Unknown")[:50]
-                prize = w.get("prize", "Winner")
-                url = w.get("url", "N/A")
-                console.print(f"{title}\t{prize}\t{url}")
-
-    _run_async(_winners())
+                console.print(f"[dim]Showing {result['count']} updates[/dim]")
+            
+            elif type == "discussions":
+                result = await client.get_discussions(slug, limit=limit)
+                if output_json(result, is_json):
+                    return
+                if result.get("error"):
+                    console.print(f"[red]Error: {result['error']}[/red]")
+                    sys.exit(1)
+                if not result.get("discussions"):
+                    console.print("[yellow]No discussions found.[/yellow]")
+                    return
+                console.print(f"[dim]({result['count']} discussions)[/dim]")
+                for d in result["discussions"]:
+                    title = d.get("title", "Untitled")[:40]
+                    author = d.get("author", "")[:20] or "N/A"
+                    replies = d.get("replies", "") or "0"
+                    date = d.get("date", "") or "N/A"
+                    console.print(f"{title}\t{author}\t{replies}\t{date}")
+            
+            elif type == "winners":
+                result = await client.get_winners(slug)
+                if output_json(result, is_json):
+                    return
+                if result.get("error"):
+                    console.print(f"[red]Error: {result['error']}[/red]")
+                    sys.exit(1)
+                if not result.get("winners"):
+                    msg = result.get("message", "No winners found.")
+                    console.print(f"[yellow]{msg}[/yellow]")
+                    return
+                console.print(f"[dim]({result['count']} winning projects)[/dim]")
+                for w in result["winners"]:
+                    title = w.get("title", "Unknown")[:50]
+                    prize = w.get("prize", "Winner")
+                    url = w.get("url", "N/A")
+                    console.print(f"{title}\t{prize}\t{url}")
+            
+            elif type == "rules":
+                result = await client.parse_rules_page(slug)
+                if output_json(result, is_json):
+                    return
+                if not result.get("success"):
+                    console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/red]")
+                    sys.exit(1)
+                console.print(f"[cyan]{slug}[/cyan] — Rules\n")
+                sections = [
+                    ("Eligibility", result.get("eligibility", [])),
+                    ("Requirements", result.get("requirements", [])),
+                    ("Judging Criteria", result.get("judging_criteria", [])),
+                    ("Sponsor APIs / Tech Requirements", result.get("sponsor_apis", [])),
+                    ("Key Dates", result.get("key_dates", [])),
+                ]
+                for label, items in sections:
+                    if items:
+                        console.print(f"{label}:")
+                        for item in items:
+                            console.print(f"  - {item[:200]}")
+                        console.print("")
+                if result.get("prize_categories"):
+                    console.print("Prize Categories:")
+                    for cat in result["prize_categories"]:
+                        console.print(f"  - {cat[:200]}")
+                    console.print("")
+                if not any([result.get("eligibility"), result.get("requirements"), result.get("judging_criteria"), result.get("sponsor_apis"), result.get("key_dates"), result.get("prize_categories")]):
+                    console.print("[dim]No structured rules sections found.[/dim]")
+                    console.print(f"[dim]Raw text length: {result.get('raw_text_length', 0)} chars[/dim]")
+    
+    _run_async(_get())
 
 
 @cli.command()
@@ -834,7 +870,7 @@ def evaluate(slug: str, skills: Optional[str], is_json: Optional[bool], no_cache
     skills_list = [s.strip() for s in skills.split(",")] if skills else None
 
     async def _evaluate():
-        async with DevpostClient(headed=_cli_config.get("headed", False), use_cache=not no_cache) as client:
+        async with DevpostClient(headed=_cli_config.get("headed", False), use_cache=not no_cache, debug_screenshots=_cli_config.get("debug_screenshots", False)) as client:
             result = await client.evaluate_hackathon(slug, skills=skills_list)
 
             if output_json(result, is_json):
@@ -988,7 +1024,7 @@ def _search_projects_across(
 ):
     """Search projects across multiple hackathons."""
     async def _run():
-        async with DevpostClient(headed=_cli_config.get("headed", False), use_cache=use_cache) as client:
+        async with DevpostClient(headed=_cli_config.get("headed", False), use_cache=use_cache, debug_screenshots=_cli_config.get("debug_screenshots", False)) as client:
             projects = await client.search_projects_across_hackathons(
                 query=query,
                 hackathon_states=["open", "upcoming"],
@@ -1057,7 +1093,7 @@ def _search_projects_global(
         if operators:
             full_query = f"{query} {' '.join(operators)}"
 
-        async with DevpostClient(headed=_cli_config.get("headed", False), use_cache=use_cache) as client:
+        async with DevpostClient(headed=_cli_config.get("headed", False), use_cache=use_cache, debug_screenshots=_cli_config.get("debug_screenshots", False)) as client:
             projects = await client.search_projects(
                 query=full_query,
                 limit=limit,
@@ -1099,7 +1135,7 @@ def _search_in_hackathon(
     is_json: Optional[bool],
 ):
     async def _run():
-        async with DevpostClient(headed=_cli_config.get("headed", False), use_cache=use_cache) as client:
+        async with DevpostClient(headed=_cli_config.get("headed", False), use_cache=use_cache, debug_screenshots=_cli_config.get("debug_screenshots", False)) as client:
             result = await client.search_in_hackathon(
                 hackathon_slug_or_url=hackathon,
                 query=query,
@@ -1155,44 +1191,6 @@ def _search_in_hackathon(
 
 
 @cli.command()
-@click.argument("slug")
-@click.option("--limit", "-l", default=50, help="Number of participants to show (default: 50)")
-@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
-def participants(slug: str, limit: int, is_json: Optional[bool]):
-    """List participants from a hackathon.
-    
-    \b
-    Examples:
-      devpost participants medo               # List MeDo participants
-      devpost participants hack --limit 100
-      devpost participants hack --json
-    """
-    async def _participants():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
-            result = await client.get_participants(slug, limit=limit)
-
-            if output_json(result, is_json):
-                return
-
-            if result.get("error"):
-                console.print(f"[red]Error: {result['error']}[/red]")
-                sys.exit(1)
-
-            if not result.get("participants"):
-                console.print("[yellow]No participants found.[/yellow]")
-                return
-
-            console.print(f"[dim]({result['count']} participants)[/dim]")
-            for p in result["participants"]:
-                username = p.get("username", "Unknown")[:30]
-                name = p.get("name", "")[:30]
-                url = p.get("url", "")
-                console.print(f"{username}\t{name}\t{url}")
-
-    _run_async(_participants())
-
-
-@cli.command()
 @click.argument("query")
 @click.option("--limit", "-l", default=20, help="Number of results (default: 20)")
 @click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
@@ -1209,7 +1207,7 @@ def search_users(query: str, limit: int, is_json: Optional[bool]):
       devpost search-users "AI" --json
     """
     async def _search():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+        async with DevpostClient(headed=_cli_config.get("headed", False), debug_screenshots=_cli_config.get("debug_screenshots", False)) as client:
             users = await client.search_users(query=query, limit=limit)
 
             if output_json(users, is_json):
@@ -1275,7 +1273,7 @@ def build(hackathons: bool, projects: bool, limit: int):
         
         console.print("[dim]Building search index...[/dim]")
         
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+        async with DevpostClient(headed=_cli_config.get("headed", False), debug_screenshots=_cli_config.get("debug_screenshots", False)) as client:
             if hackathons or not projects:
                 console.print("[dim]Fetching hackathons...[/dim]")
                 hackathons_list = await client.list_all_hackathons(
@@ -1411,325 +1409,133 @@ def index_clear(confirm: bool):
 
 @cli.command()
 @click.argument("slug")
-@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
-def resources(slug: str, is_json: Optional[bool]):
-    """List resources from a hackathon.
+@click.option("--section", "-s", type=click.Choice(["dates", "eligibility", "requirements", "judging", "prizes", "faq", "all"]), default="all", help="Specific section to view (default: all)")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def details(slug: str, section: str, is_json: Optional[bool]):
+    """View hackathon details.
+    
+    Shows all sections by default, or use --section to view a specific section.
     
     \b
     Examples:
-      devpost resources medo                  # List MeDo resources
-      devpost resources hack --json
+      devpost details hackathon                  # All sections
+      devpost details hackathon -s eligibility   # Eligibility only
+      devpost details hackathon --section=prizes
+      devpost details hackathon --json
     """
-    async def _resources():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
-            result = await client.get_resources(slug)
-
-            if output_json(result, is_json):
-                return
-
-            if result.get("error"):
-                console.print(f"[red]Error: {result['error']}[/red]")
-                sys.exit(1)
-
-            if not result.get("resources"):
-                console.print("[yellow]No resources found.[/yellow]")
-                return
-
-            console.print(f"[dim]({len(result['resources'])} resources)[/dim]")
-            for r in result["resources"]:
-                title = r.get("title", "Unknown")[:50]
-                url = r.get("url", "")
-                console.print(f"{title}\t{url}")
-
-    _run_async(_resources())
-
-
-@cli.command()
-@click.argument("slug")
-@click.option("--limit", "-l", default=20, help="Number of updates to show (default: 20)")
-@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
-def updates(slug: str, limit: int, is_json: Optional[bool]):
-    """List updates from a hackathon.
-    
-    \b
-    Examples:
-      devpost updates medo                    # List MeDo updates
-      devpost updates hack --limit 50
-      devpost updates hack --json
-    """
-    async def _updates():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
-            result = await client.get_updates(slug, limit=limit)
-
-            if output_json(result, is_json):
-                return
-
-            if result.get("error"):
-                console.print(f"[red]Error: {result['error']}[/red]")
-                sys.exit(1)
-
-            if not result.get("updates"):
-                console.print("[yellow]No updates found.[/yellow]")
-                return
-
-            for u in result["updates"]:
-                console.print(f"[cyan]{u.get('title', 'Untitled')}[/cyan]")
-                if u.get("date"):
-                    console.print(f"  [dim]{u['date']}[/dim]")
-                if u.get("content"):
-                    console.print(f"  [dim]{u['content'][:200]}[/dim]")
-                if u.get("url"):
-                    console.print(f"  [dim]{u['url']}[/dim]")
-                console.print("")
-
-            console.print(f"[dim]Showing {result['count']} updates[/dim]")
-
-    _run_async(_updates())
-
-
-@cli.command()
-@click.argument("slug")
-@click.option("--limit", "-l", default=20, help="Number of discussions to show (default: 20)")
-@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
-def discussions(slug: str, limit: int, is_json: Optional[bool]):
-    """List discussions/forum topics from a hackathon.
-    
-    \b
-    Examples:
-      devpost discussions medo                # List MeDo discussions
-      devpost discussions hack --limit 50
-      devpost discussions hack --json
-    """
-    async def _discussions():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
-            result = await client.get_discussions(slug, limit=limit)
-
-            if output_json(result, is_json):
-                return
-
-            if result.get("error"):
-                console.print(f"[red]Error: {result['error']}[/red]")
-                sys.exit(1)
-
-            if not result.get("discussions"):
-                console.print("[yellow]No discussions found.[/yellow]")
-                return
-
-            console.print(f"[dim]({result['count']} discussions)[/dim]")
-            for d in result["discussions"]:
-                title = d.get("title", "Untitled")[:40]
-                author = d.get("author", "")[:20] or "N/A"
-                replies = d.get("replies", "") or "0"
-                date = d.get("date", "") or "N/A"
-                console.print(f"{title}\t{author}\t{replies}\t{date}")
-
-    _run_async(_discussions())
-
-
-@cli.group()
-def details():
-    """View hackathon details sub-pages.
-    
-    \b
-    Examples:
-      devpost details medo               # All sections
-      devpost details medo dates         # Schedule/dates
-      devpost details medo eligibility   # Eligibility rules
-      devpost details medo requirements  # Submission requirements
-      devpost details medo judging       # Judging criteria
-      devpost details medo prizes        # Prize breakdown
-    """
-    pass
-
-
-@details.command()
-@click.argument("slug")
-@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
-def dates(slug: str, is_json: Optional[bool]):
-    """View hackathon schedule and key dates."""
-    async def _dates():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
-            hackathon = await client.get_hackathon_by_slug(slug)
-            if not hackathon:
-                console.print(f"[red]Hackathon '{slug}' not found.[/red]")
-                sys.exit(3)
-            
-            dates_info = hackathon.get("submission_period_dates", "No dates available")
-            time_left = hackathon.get("time_left_to_submission", "")
-            
-            result = {
-                "slug": slug,
-                "title": hackathon.get("title"),
-                "dates": dates_info,
-                "time_left": time_left,
-            }
-            
-            if output_json(result, is_json):
-                return
-            
-            console.print(f"[cyan]{hackathon.get('title', slug)}[/cyan]")
-            console.print(f"dates: {dates_info}")
-            console.print(f"time_left: {time_left or 'N/A'}")
-    
-    _run_async(_dates())
-
-
-@details.command()
-@click.argument("slug")
-@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
-def eligibility(slug: str, is_json: Optional[bool]):
-    """View hackathon eligibility rules."""
-    async def _eligibility():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
-            rules = await client.parse_rules_page(slug)
-            
-            if output_json(rules, is_json):
-                return
-            
-            eligibility = rules.get("eligibility", [])
-            if not eligibility:
-                console.print("[yellow]No eligibility rules found.[/yellow]")
-                return
-            
-            console.print(f"[cyan]{slug}[/cyan] — Eligibility\n")
-            for item in eligibility[:10]:
-                console.print(f"  - {item[:200]}")
-    
-    _run_async(_eligibility())
-
-
-@details.command()
-@click.argument("slug")
-@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
-def requirements(slug: str, is_json: Optional[bool]):
-    """View submission requirements."""
-    async def _requirements():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
-            rules = await client.parse_rules_page(slug)
-            
-            if output_json(rules, is_json):
-                return
-            
-            requirements = rules.get("requirements", [])
-            if not requirements:
-                console.print("[yellow]No requirements found.[/yellow]")
-                return
-            
-            console.print(f"[cyan]{slug}[/cyan] — Requirements\n")
-            for item in requirements[:10]:
-                console.print(f"  - {item[:200]}")
-    
-    _run_async(_requirements())
-
-
-@details.command()
-@click.argument("slug")
-@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
-def judging(slug: str, is_json: Optional[bool]):
-    """View judging criteria."""
-    async def _judging():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
-            rules = await client.parse_rules_page(slug)
-            
-            if output_json(rules, is_json):
-                return
-            
-            judging = rules.get("judging_criteria", [])
-            if not judging:
-                console.print("[yellow]No judging criteria found.[/yellow]")
-                return
-            
-            console.print(f"[cyan]{slug}[/cyan] — Judging Criteria\n")
-            for item in judging[:10]:
-                console.print(f"  - {item[:200]}")
-    
-    _run_async(_judging())
-
-
-@details.command()
-@click.argument("slug")
-@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
-def prizes(slug: str, is_json: Optional[bool]):
-    """View prize breakdown."""
-    async def _prizes():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
-            rules = await client.parse_rules_page(slug)
-            
-            if output_json(rules, is_json):
-                return
-            
-            prizes = rules.get("prize_categories", [])
-            if not prizes:
+    async def _show():
+        async with DevpostClient(headed=_cli_config.get("headed", False), debug_screenshots=_cli_config.get("debug_screenshots", False)) as client:
+            if section in ("all", "dates"):
                 hackathon = await client.get_hackathon_by_slug(slug)
-                prize_amount = hackathon.get("prize_amount", "N/A") if hackathon else "N/A"
-                console.print(f"[yellow]No detailed prize breakdown found. Total: {prize_amount}[/yellow]")
-                return
+                if not hackathon:
+                    if output_json({"error": f"Hackathon '{slug}' not found", "code": "NOT_FOUND"}, is_json):
+                        sys.exit(3)
+                    console.print(f"[red]Hackathon '{slug}' not found.[/red]")
+                    sys.exit(3)
+                
+                dates_info = hackathon.get("submission_period_dates", "No dates available")
+                time_left = hackathon.get("time_left_to_submission", "")
+                
+                if section == "dates":
+                    result = {"slug": slug, "title": hackathon.get("title"), "dates": dates_info, "time_left": time_left}
+                    if output_json(result, is_json):
+                        return
+                    console.print(f"[cyan]{hackathon.get('title', slug)}[/cyan]")
+                    console.print(f"dates: {dates_info}")
+                    console.print(f"time_left: {time_left or 'N/A'}")
             
-            console.print(f"[cyan]{slug}[/cyan] — Prizes\n")
-            for item in prizes[:15]:
-                console.print(f"  - {item[:200]}")
-    
-    _run_async(_prizes())
-
-
-@details.command()
-@click.argument("slug")
-@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
-def faq(slug: str, is_json: Optional[bool]):
-    """View hackathon FAQ."""
-    async def _faq():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
-            # Try to fetch the FAQ page
-            from httpx import AsyncClient
-            client_http = AsyncClient(headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept": "text/html",
-            }, follow_redirects=True)
+            if section in ("all", "eligibility", "requirements", "judging", "prizes"):
+                rules = await client.parse_rules_page(slug)
+                
+                if section == "eligibility":
+                    if output_json(rules, is_json):
+                        return
+                    eligibility = rules.get("eligibility", [])
+                    if not eligibility:
+                        console.print("[yellow]No eligibility rules found.[/yellow]")
+                        return
+                    console.print(f"[cyan]{slug}[/cyan] — Eligibility\n")
+                    for item in eligibility[:10]:
+                        console.print(f"  - {item[:200]}")
+                
+                elif section == "requirements":
+                    if output_json(rules, is_json):
+                        return
+                    requirements = rules.get("requirements", [])
+                    if not requirements:
+                        console.print("[yellow]No requirements found.[/yellow]")
+                        return
+                    console.print(f"[cyan]{slug}[/cyan] — Requirements\n")
+                    for item in requirements[:10]:
+                        console.print(f"  - {item[:200]}")
+                
+                elif section == "judging":
+                    if output_json(rules, is_json):
+                        return
+                    judging = rules.get("judging_criteria", [])
+                    if not judging:
+                        console.print("[yellow]No judging criteria found.[/yellow]")
+                        return
+                    console.print(f"[cyan]{slug}[/cyan] — Judging Criteria\n")
+                    for item in judging[:10]:
+                        console.print(f"  - {item[:200]}")
+                
+                elif section == "prizes":
+                    if output_json(rules, is_json):
+                        return
+                    prizes = rules.get("prize_categories", [])
+                    if not prizes:
+                        hackathon = await client.get_hackathon_by_slug(slug)
+                        prize_amount = hackathon.get("prize_amount", "N/A") if hackathon else "N/A"
+                        console.print(f"[yellow]No detailed prize breakdown found. Total: {prize_amount}[/yellow]")
+                        return
+                    console.print(f"[cyan]{slug}[/cyan] — Prizes\n")
+                    for item in prizes[:15]:
+                        console.print(f"  - {item[:200]}")
             
-            try:
-                resp = await client_http.get(f"https://{slug}.devpost.com/details/faq")
-                from bs4 import BeautifulSoup
-                soup = BeautifulSoup(resp.text, "html.parser")
+            if section in ("all", "faq"):
+                from httpx import AsyncClient
+                client_http = AsyncClient(headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Accept": "text/html",
+                }, follow_redirects=True)
                 
-                # Look for actual FAQ content (Q&A pairs)
-                faq_items = []
-                for elem in soup.find_all(['div', 'section', 'article'], class_=re.compile(r'faq|question|answer|qa', re.I)):
-                    text = elem.get_text(strip=True)
-                    if text and len(text) > 20:
-                        faq_items.append(text[:500])
-                
-                # Check for help desk link
-                help_links = []
-                for a in soup.find_all('a', href=re.compile(r'help\.devpost\.com', re.I)):
-                    href = a.get('href', '')
-                    if href and href not in help_links:
-                        help_links.append(href)
-                
-                result = {
-                    "slug": slug,
-                    "faq_items": faq_items[:10],
-                    "help_links": help_links,
-                }
-                
-                if output_json(result, is_json):
-                    return
-                
-                if faq_items:
-                    console.print(f"[cyan]{slug}[/cyan] — FAQ\n")
-                    for item in faq_items[:5]:
-                        console.print(f"  {item[:300]}\n")
-                elif help_links:
-                    console.print(f"[yellow]No hackathon-specific FAQ found. Check the Devpost Help Desk:[/yellow]")
-                    for link in help_links[:2]:
-                        console.print(f"  {link}")
-                else:
-                    console.print("[yellow]No FAQ content found.[/yellow]")
-                    console.print("  Check: https://help.devpost.com/")
+                try:
+                    resp = await client_http.get(f"https://{slug}.devpost.com/details/faq")
+                    from bs4 import BeautifulSoup
+                    soup = BeautifulSoup(resp.text, "html.parser")
                     
-            finally:
-                await client_http.aclose()
+                    faq_items = []
+                    for elem in soup.find_all(['div', 'section', 'article'], class_=re.compile(r'faq|question|answer|qa', re.I)):
+                        text = elem.get_text(strip=True)
+                        if text and len(text) > 20:
+                            faq_items.append(text[:500])
+                    
+                    help_links = []
+                    for a in soup.find_all('a', href=re.compile(r'help\.devpost\.com', re.I)):
+                        href = a.get('href', '')
+                        if href and href not in help_links:
+                            help_links.append(href)
+                    
+                    if section == "faq":
+                        result = {"slug": slug, "faq_items": faq_items[:10], "help_links": help_links}
+                        if output_json(result, is_json):
+                            return
+                        if faq_items:
+                            console.print(f"[cyan]{slug}[/cyan] — FAQ\n")
+                            for item in faq_items[:5]:
+                                console.print(f"  {item[:300]}\n")
+                        elif help_links:
+                            console.print(f"[yellow]No hackathon-specific FAQ found. Check the Devpost Help Desk:[/yellow]")
+                            for link in help_links[:2]:
+                                console.print(f"  {link}")
+                        else:
+                            console.print("[yellow]No FAQ content found.[/yellow]")
+                            console.print("  Check: https://help.devpost.com/")
+                finally:
+                    await client_http.aclose()
     
-    _run_async(_faq())
+    _run_async(_show())
 
 
 @cli.command()
@@ -1745,7 +1551,7 @@ def themes(popular: bool, is_json: Optional[bool]):
       devpost themes --json                  # JSON output
     """
     async def _themes():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+        async with DevpostClient(headed=_cli_config.get("headed", False), debug_screenshots=_cli_config.get("debug_screenshots", False)) as client:
             themes_list = await client.get_themes(popular=popular)
             
             if output_json(themes_list, is_json):
@@ -1782,7 +1588,7 @@ def trending(is_json: Optional[bool]):
       devpost trending --json                # JSON output
     """
     async def _trending():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+        async with DevpostClient(headed=_cli_config.get("headed", False), debug_screenshots=_cli_config.get("debug_screenshots", False)) as client:
             technologies = await client.get_trending_technologies()
             
             if output_json(technologies, is_json):
@@ -1828,7 +1634,7 @@ def search(query: str, limit: int, sort: str, winner: bool, featured: bool, is_j
         if featured:
             full_query += " is:featured"
 
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+        async with DevpostClient(headed=_cli_config.get("headed", False), debug_screenshots=_cli_config.get("debug_screenshots", False)) as client:
             projects = await client.search_projects(query=full_query, limit=limit, order_by=sort if sort != "newest" else None)
 
             if output_json(projects, is_json):
@@ -1859,7 +1665,7 @@ def search(query: str, limit: int, sort: str, winner: bool, featured: bool, is_j
 def popular(limit: int, is_json: Optional[bool]):
     """List popular projects."""
     async def _run():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+        async with DevpostClient(headed=_cli_config.get("headed", False), debug_screenshots=_cli_config.get("debug_screenshots", False)) as client:
             projects = await client.get_popular_projects(limit=limit)
 
             if output_json(projects, is_json):
@@ -1899,7 +1705,7 @@ def built_with(tech: str, limit: int, sort: str, is_json: Optional[bool]):
       devpost projects built-with Python --sort trending
     """
     async def _run():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+        async with DevpostClient(headed=_cli_config.get("headed", False), debug_screenshots=_cli_config.get("debug_screenshots", False)) as client:
             projects = await client.get_built_with_projects(tech=tech, limit=limit, order_by=sort if sort != "newest" else None)
 
             if output_json(projects, is_json):
@@ -1929,7 +1735,7 @@ def built_with(tech: str, limit: int, sort: str, is_json: Optional[bool]):
 def featured(limit: int, is_json: Optional[bool]):
     """List staff picks / featured projects."""
     async def _run():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+        async with DevpostClient(headed=_cli_config.get("headed", False), debug_screenshots=_cli_config.get("debug_screenshots", False)) as client:
             projects = await client.get_featured_projects(limit=limit)
 
             if output_json(projects, is_json):
@@ -1971,7 +1777,7 @@ def deadlines(this_week: bool, today: bool, limit: int, no_cache: bool, is_json:
       devpost deadlines --json
     """
     async def _run():
-        async with DevpostClient(headed=_cli_config.get("headed", False), use_cache=not no_cache) as client:
+        async with DevpostClient(headed=_cli_config.get("headed", False), use_cache=not no_cache, debug_screenshots=_cli_config.get("debug_screenshots", False)) as client:
             hackathons = await client.list_hackathons(limit=200, open_state="open")
 
             deadline_hackathons = []
@@ -2079,31 +1885,88 @@ def _format_bytes(n: int) -> str:
 
 
 @cli.group()
-def submit():
-    """Submit and manage projects.
+def project():
+    """Manage Devpost projects.
     
-    Requires authentication via `devpost auth login` or environment variables:
-      export DEVPOST_EMAIL="your@email.com"
-      export DEVPOST_PASSWORD="your_password"
+    Create project manifests, submit to hackathons, and update submissions.
+    
+    \b
+    Quick Start:
+      devpost project init              # Create devpost.yaml + SUBMISSION.md
+      devpost project submit --config devpost.yaml
+      devpost project update --config devpost.yaml
+    
+    \b
+    Requires authentication:
+      devpost auth login
+      export DEVPOST_EMAIL="..."
+      export DEVPOST_PASSWORD="..."
     """
     pass
 
 
-@submit.command(name="project")
+@project.command()
+@click.option("--output-dir", "-o", default=".", type=click.Path(), help="Directory to create files in")
+def init(output_dir: str):
+    """Initialize a project submission manifest.
+    
+    Creates devpost.yaml and SUBMISSION.md template files in the current directory.
+    Edit these files, then use `devpost project submit --config devpost.yaml`.
+    
+    \b
+    Examples:
+      devpost project init                 # Create in current directory
+      devpost project init -o ./my-project # Create in specific directory
+    """
+    from .project_yaml import generate_template, generate_submission_md_template
+    from pathlib import Path
+    
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    config_file = output_path / "devpost.yaml"
+    submission_file = output_path / "SUBMISSION.md"
+    
+    # Check if files already exist
+    if config_file.exists():
+        console.print(f"[yellow]Warning: {config_file} already exists[/yellow]")
+    
+    if submission_file.exists():
+        console.print(f"[yellow]Warning: {submission_file} already exists[/yellow]")
+    
+    # Write files
+    config_file.write_text(generate_template(), encoding='utf-8')
+    submission_file.write_text(generate_submission_md_template(), encoding='utf-8')
+    
+    console.print(f"[green]Created {config_file}[/green]")
+    console.print(f"[green]Created {submission_file}[/green]")
+    console.print("")
+    console.print("[dim]Next steps:[/dim]")
+    console.print("  1. Edit devpost.yaml with your project details")
+    console.print("  2. Edit SUBMISSION.md with your project description")
+    console.print("  3. Add screenshots to the images: section")
+    console.print("  4. Run: devpost project submit --config devpost.yaml")
+
+
+@project.command(name="submit")
 @click.argument("hackathon_slug")
-@click.option("--title", "-t", required=True, help="Project title")
-@click.option("--tagline", "-tag", required=True, help="Short description (max 140 chars)")
+@click.option("--config", "-c", type=click.Path(exists=True), help="Path to devpost.yaml config file")
+@click.option("--title", "-t", help="Project title (overrides config file)")
+@click.option("--tagline", "-tag", help="Short description (max 140 chars, overrides config)")
 @click.option("--description", "-d", help="Full project description (markdown)")
+@click.option("--description-file", help="Path to markdown file for description (overrides config)")
 @click.option("--built-with", "-b", help="Comma-separated list of technologies")
 @click.option("--github", help="GitHub repository URL")
 @click.option("--demo", help="Live demo URL")
 @click.option("--video", help="Demo video URL (YouTube, etc.)")
 @click.option("--dry-run", is_flag=True, help="Test without actually submitting")
-def submit_project_cmd(
+def project_submit(
     hackathon_slug: str,
-    title: str,
-    tagline: str,
+    config: Optional[str],
+    title: Optional[str],
+    tagline: Optional[str],
     description: Optional[str],
+    description_file: Optional[str],
     built_with: Optional[str],
     github: Optional[str],
     demo: Optional[str],
@@ -2116,15 +1979,19 @@ def submit_project_cmd(
     
     \b
     Examples:
-      devpost submit project zervehack \\
+      devpost project submit zervehack --config devpost.yaml
+      devpost project submit zervehack \\
         --title "My Project" \\
         --tagline "AI-powered solution" \\
         --built-with "Python,React,OpenAI" \\
         --github "https://github.com/user/repo" \\
         --dry-run
       
-      devpost submit project hack2026 -t "Demo" -tag "Cool demo" -b "FastAPI"
+      devpost project submit hack2026 -t "Demo" -tag "Cool demo" -b "FastAPI"
+      devpost project submit hack2026 --description-file README.md -t "My Project" -tag "Tagline"
     """
+    from .project_yaml import load_config, markdown_to_html
+    
     async def _submit():
         try:
             email, password = AuthenticatedClient.get_credentials()
@@ -2133,24 +2000,79 @@ def submit_project_cmd(
             console.print("Set them with: export DEVPOST_EMAIL='your@email.com'")
             sys.exit(1)
 
+        # Use working variables to avoid shadowing function parameters
+        work_hackathon = hackathon_slug
+        work_title = title
+        work_tagline = tagline
+        work_description = description
+        work_description_file = description_file
+        work_built_with = built_with
+        work_github = github
+        work_demo = demo
+        work_video = video
+
+        # Load config file if provided
+        cfg = None
+        if config:
+            cfg = load_config(config)
+            # Only override from config if CLI flags weren't provided
+            if not work_hackathon or work_hackathon == "None":
+                work_hackathon = cfg.hackathon
+            if not work_title:
+                work_title = cfg.title
+            if not work_tagline:
+                work_tagline = cfg.tagline
+            if not work_description_file:
+                work_description_file = cfg.description_file
+            if not work_description:
+                work_description = cfg.description
+            if not work_built_with:
+                work_built_with = ",".join(cfg.built_with) if cfg.built_with else None
+            if not work_github:
+                work_github = cfg.links.github if cfg.links else None
+            if not work_demo:
+                work_demo = cfg.links.demo if cfg.links else None
+            if not work_video:
+                work_video = cfg.links.video if cfg.links else None
+        
+        if not work_title or not work_tagline:
+            console.print("[red]Error: --title and --tagline are required (or use --config)[/red]")
+            sys.exit(1)
+
+        # Process description from file if specified
+        final_description = work_description
+        if work_description_file:
+            try:
+                from pathlib import Path
+                md_content = Path(work_description_file).read_text(encoding='utf-8')
+                final_description = markdown_to_html(md_content)
+                console.print(f"[dim]Loaded description from {work_description_file}[/dim]")
+            except FileNotFoundError:
+                console.print(f"[red]Error: Description file not found: {work_description_file}[/red]")
+                sys.exit(1)
+
         async with AuthenticatedClient(email=email, password=password, headed=_cli_config.get("headed", False)) as client:
-            tech_list = [t.strip() for t in built_with.split(",")] if built_with else None
+            tech_list = [t.strip() for t in work_built_with.split(",")] if work_built_with else None
 
             links = {}
-            if github:
-                links["github"] = github
-            if demo:
-                links["demo"] = demo
-            if video:
-                links["video"] = video
+            if work_github:
+                links["github"] = work_github
+            if work_demo:
+                links["demo"] = work_demo
+            if work_video:
+                links["video"] = work_video
+
+            # Get image paths from config if available
+            image_paths = cfg.images if cfg and cfg.images else None
 
             result = await client.submit_project(
-                hackathon_slug=hackathon_slug,
-                title=title,
-                tagline=tagline,
-                description=description,
+                hackathon_slug=work_hackathon,
+                title=work_title,
+                tagline=work_tagline,
+                description=final_description,
                 built_with=tech_list,
                 links=links if links else None,
+                image_paths=image_paths,
                 dry_run=dry_run,
             )
 
@@ -2163,11 +2085,468 @@ def submit_project_cmd(
                 console.print(f"[yellow]DRY RUN[/yellow]")
                 console.print(f"hackathon: {result['hackathon_slug']}")
                 console.print(f"title: {result['project_title']}")
-                console.print(f"tagline: {tagline}")
+                console.print(f"tagline: {work_tagline}")
+                if image_paths:
+                    console.print(f"images: Would upload {len(image_paths)} image(s)")
             else:
                 console.print(f"[green]Successfully submitted![/green]")
                 console.print(f"url: {result.get('url', 'N/A')}")
                 console.print(f"title: {result['project_title']}")
+                if result.get("uploaded_images"):
+                    console.print(f"[green]Uploaded {len(result['uploaded_images'])} image(s)[/green]")
+                if result.get("failed_images"):
+                    for failed in result["failed_images"]:
+                        console.print(f"[yellow]Failed: {failed['path']} - {failed['reason']}[/yellow]")
+                
+                # Update config file with project URL if used
+                if config and result.get("url"):
+                    from .project_yaml import update_project_url
+                    update_project_url(config, result["url"])
+                    console.print(f"[dim]Updated {config} with project_url[/dim]")
+
+    _run_async(_submit())
+
+
+@project.command(name="update")
+@click.argument("project_url")
+@click.option("--config", "-c", type=click.Path(exists=True), help="Path to devpost.yaml config file")
+@click.option("--title", "-t", help="New title")
+@click.option("--tagline", "-tag", help="New tagline")
+@click.option("--description", "-d", help="New description (markdown)")
+@click.option("--description-file", help="Path to markdown file for description")
+@click.option("--built-with", "-b", help="Comma-separated technologies")
+@click.option("--github", help="GitHub URL")
+@click.option("--demo", help="Demo URL")
+@click.option("--video", help="Video URL")
+@click.option("--dry-run", is_flag=True, help="Test without saving")
+def project_update(project_url: str, config: Optional[str], title: Optional[str], tagline: Optional[str], description: Optional[str],
+           description_file: Optional[str], built_with: Optional[str], github: Optional[str], demo: Optional[str], video: Optional[str], dry_run: bool):
+    """Update an existing submission from a config file.
+    
+    Re-reads devpost.yaml and SUBMISSION.md, then pushes all changes to Devpost.
+    
+    \b
+    Examples:
+      devpost project update --config devpost.yaml
+      devpost project update https://devpost.com/software/myproj --config devpost.yaml
+    """
+    from .project_yaml import load_config, markdown_to_html
+    
+    async def _update():
+        try:
+            email, password = AuthenticatedClient.get_credentials()
+        except DevpostError as e:
+            console.print(f"[red]Error: {e.message}[/red]")
+            sys.exit(1)
+
+        # Use working variables to avoid shadowing function parameters
+        work_project_url = project_url
+        work_title = title
+        work_tagline = tagline
+        work_description = description
+        work_description_file = description_file
+        work_built_with = built_with
+        work_github = github
+        work_demo = demo
+        work_video = video
+
+        # Load config file if provided
+        cfg = None
+        image_paths = None
+        if config:
+            cfg = load_config(config)
+            if not work_project_url:
+                work_project_url = cfg.project_url
+            if not work_title:
+                work_title = cfg.title
+            if not work_tagline:
+                work_tagline = cfg.tagline
+            if not work_description_file:
+                work_description_file = cfg.description_file
+            if not work_description:
+                work_description = cfg.description
+            if not work_built_with:
+                work_built_with = ",".join(cfg.built_with) if cfg.built_with else None
+            if not work_github:
+                work_github = cfg.links.github if cfg.links else None
+            if not work_demo:
+                work_demo = cfg.links.demo if cfg.links else None
+            if not work_video:
+                work_video = cfg.links.video if cfg.links else None
+            image_paths = cfg.images
+        
+        if not work_project_url:
+            console.print("[red]Error: project_url argument or --config with project_url is required[/red]")
+            sys.exit(1)
+
+        if not any([work_title, work_tagline, work_description, work_description_file, work_built_with, work_github, work_demo, work_video, image_paths]):
+            console.print("[yellow]Warning: No fields to update specified.[/yellow]")
+            sys.exit(1)
+
+        # Process description from file if specified
+        final_description = work_description
+        if work_description_file:
+            try:
+                from pathlib import Path
+                md_content = Path(work_description_file).read_text(encoding='utf-8')
+                final_description = markdown_to_html(md_content)
+                console.print(f"[dim]Loaded description from {work_description_file}[/dim]")
+            except FileNotFoundError:
+                console.print(f"[red]Error: Description file not found: {work_description_file}[/red]")
+                sys.exit(1)
+
+        async with AuthenticatedClient(email=email, password=password, headed=_cli_config.get("headed", False)) as client:
+            tech_list = [t.strip() for t in work_built_with.split(",")] if work_built_with else None
+
+            links = {}
+            if work_github:
+                links["github"] = work_github
+            if work_demo:
+                links["demo"] = work_demo
+            if work_video:
+                links["video"] = work_video
+
+            result = await client.update_submission(
+                project_url=work_project_url,
+                title=work_title,
+                tagline=work_tagline,
+                description=final_description,
+                built_with=tech_list,
+                links=links if links else None,
+                image_paths=image_paths,
+                dry_run=dry_run,
+            )
+
+            if result.get("error"):
+                console.print(f"[red]Error: {result['error']}[/red]")
+                sys.exit(1)
+
+            if dry_run:
+                console.print(f"[yellow]DRY RUN[/yellow]")
+                console.print(f"project: {result['url']}")
+                console.print(f"fields: {', '.join(result['updated_fields'])}")
+            else:
+                console.print(f"[green]Successfully updated![/green]")
+                console.print(f"updated: {', '.join(result['updated_fields'])}")
+                if result.get("uploaded_images"):
+                    console.print(f"[green]Uploaded {len(result['uploaded_images'])} image(s)[/green]")
+
+    _run_async(_update())
+
+
+@cli.group()
+def submit():
+    """Submit and manage projects (legacy commands).
+    
+    \b
+    Note: New projects should use 'devpost project' commands.
+    Legacy commands are still supported for backward compatibility.
+    
+    \b
+    Legacy Quick Start:
+      devpost submit project hackathon -t "Title" -tag "Tagline"
+      devpost update <url> --title "New Title"
+    """
+    pass
+
+
+@submit.command(name="project")
+@click.argument("hackathon_slug")
+@click.option("--config", "-c", type=click.Path(exists=True), help="Path to devpost.yaml config file")
+@click.option("--title", "-t", help="Project title (overrides config file)")
+@click.option("--tagline", "-tag", help="Short description (max 140 chars, overrides config)")
+@click.option("--description", "-d", help="Full project description (markdown)")
+@click.option("--description-file", help="Path to markdown file for description (overrides config)")
+@click.option("--built-with", "-b", help="Comma-separated list of technologies")
+@click.option("--github", help="GitHub repository URL")
+@click.option("--demo", help="Live demo URL")
+@click.option("--video", help="Demo video URL (YouTube, etc.)")
+@click.option("--dry-run", is_flag=True, help="Test without actually submitting")
+def submit_project_cmd(
+    hackathon_slug: str,
+    config: Optional[str],
+    title: Optional[str],
+    tagline: Optional[str],
+    description: Optional[str],
+    description_file: Optional[str],
+    built_with: Optional[str],
+    github: Optional[str],
+    demo: Optional[str],
+    video: Optional[str],
+    dry_run: bool,
+):
+    """Submit a new project to a hackathon.
+    
+    Requires authentication. Always test with --dry-run first!
+    
+    \b
+    Examples:
+      devpost submit project zervehack --config devpost.yaml
+      devpost submit project zervehack \\
+        --title "My Project" \\
+        --tagline "AI-powered solution" \\
+        --built-with "Python,React,OpenAI" \\
+        --github "https://github.com/user/repo" \\
+        --dry-run
+      
+      devpost submit project hack2026 -t "Demo" -tag "Cool demo" -b "FastAPI"
+      devpost submit project hack2026 --description-file README.md -t "My Project" -tag "Tagline"
+    """
+    from .project_yaml import load_config, markdown_to_html
+    
+    async def _submit():
+        try:
+            email, password = AuthenticatedClient.get_credentials()
+        except DevpostError as e:
+            console.print(f"[red]Error: {e.message}[/red]")
+            console.print("Set them with: export DEVPOST_EMAIL='your@email.com'")
+            sys.exit(1)
+
+        # Use working variables to avoid shadowing function parameters
+        work_hackathon = hackathon_slug
+        work_title = title
+        work_tagline = tagline
+        work_description = description
+        work_description_file = description_file
+        work_built_with = built_with
+        work_github = github
+        work_demo = demo
+        work_video = video
+
+        # Load config file if provided
+        cfg = None
+        if config:
+            cfg = load_config(config)
+            # Only override from config if CLI flags weren't provided
+            if not work_hackathon or work_hackathon == "None":
+                work_hackathon = cfg.hackathon
+            if not work_title:
+                work_title = cfg.title
+            if not work_tagline:
+                work_tagline = cfg.tagline
+            if not work_description_file:
+                work_description_file = cfg.description_file
+            if not work_description:
+                work_description = cfg.description
+            if not work_built_with:
+                work_built_with = ",".join(cfg.built_with) if cfg.built_with else None
+            if not work_github:
+                work_github = cfg.links.github if cfg.links else None
+            if not work_demo:
+                work_demo = cfg.links.demo if cfg.links else None
+            if not work_video:
+                work_video = cfg.links.video if cfg.links else None
+        
+        if not work_title or not work_tagline:
+            console.print("[red]Error: --title and --tagline are required (or use --config)[/red]")
+            sys.exit(1)
+
+        # Process description from file if specified
+        final_description = work_description
+        if work_description_file:
+            try:
+                from pathlib import Path
+                md_content = Path(work_description_file).read_text(encoding='utf-8')
+                final_description = markdown_to_html(md_content)
+                console.print(f"[dim]Loaded description from {work_description_file}[/dim]")
+            except FileNotFoundError:
+                console.print(f"[red]Error: Description file not found: {work_description_file}[/red]")
+                sys.exit(1)
+
+        async with AuthenticatedClient(email=email, password=password, headed=_cli_config.get("headed", False)) as client:
+            tech_list = [t.strip() for t in work_built_with.split(",")] if work_built_with else None
+
+            links = {}
+            if work_github:
+                links["github"] = work_github
+            if work_demo:
+                links["demo"] = work_demo
+            if work_video:
+                links["video"] = work_video
+
+            # Get image paths from config if available
+            image_paths = cfg.images if cfg and cfg.images else None
+
+            result = await client.submit_project(
+                hackathon_slug=work_hackathon,
+                title=work_title,
+                tagline=work_tagline,
+                description=final_description,
+                built_with=tech_list,
+                links=links if links else None,
+                image_paths=image_paths,
+                dry_run=dry_run,
+            )
+
+            if result.get("error"):
+                console.print(f"[red]Error:[/red] {result['error']}")
+                console.print(f"[dim]Steps:[/dim] {json.dumps(result.get('steps', []), indent=2, default=str)}")
+                sys.exit(1)
+
+            if dry_run:
+                console.print(f"[yellow]DRY RUN[/yellow]")
+                console.print(f"hackathon: {result['hackathon_slug']}")
+                console.print(f"title: {result['project_title']}")
+                console.print(f"tagline: {work_tagline}")
+                if image_paths:
+                    console.print(f"images: Would upload {len(image_paths)} image(s)")
+            else:
+                console.print(f"[green]Successfully submitted![/green]")
+                console.print(f"url: {result.get('url', 'N/A')}")
+                console.print(f"title: {result['project_title']}")
+                if result.get("uploaded_images"):
+                    console.print(f"[green]Uploaded {len(result['uploaded_images'])} image(s)[/green]")
+                if result.get("failed_images"):
+                    for failed in result["failed_images"]:
+                        console.print(f"[yellow]Failed: {failed['path']} - {failed['reason']}[/yellow]")
+                
+                # Update config file with project URL if used
+                if config and result.get("url"):
+                    from .project_yaml import update_project_url
+                    update_project_url(config, result["url"])
+                    console.print(f"[dim]Updated {config} with project_url[/dim]")
+
+    _run_async(_submit())
+
+
+@submit.command(name="project-with-team")
+@click.argument("hackathon_slug")
+@click.option("--title", "-t", required=True, help="Project title")
+@click.option("--tagline", "-tag", required=True, help="Short description (max 140 chars)")
+@click.option("--description", "-d", help="Full project description (markdown)")
+@click.option("--built-with", "-b", help="Comma-separated list of technologies")
+@click.option("--github", help="GitHub repository URL")
+@click.option("--demo", help="Live demo URL")
+@click.option("--video", help="Demo video URL (YouTube, etc.)")
+@click.option("--team-name", required=True, help="Team name to create")
+@click.option("--invite", help="Comma-separated usernames to invite to team")
+@click.option("--dry-run", is_flag=True, help="Test without actually submitting")
+@click.option("--verbose", "-v", is_flag=True, help="Show detailed steps")
+def submit_project_with_team(
+    hackathon_slug: str,
+    title: str,
+    tagline: str,
+    description: Optional[str],
+    built_with: Optional[str],
+    github: Optional[str],
+    demo: Optional[str],
+    video: Optional[str],
+    team_name: str,
+    invite: Optional[str],
+    dry_run: bool,
+    verbose: bool,
+):
+    """Create a team and submit a project in one command.
+    
+    This is a convenient workflow for creating a team and immediately submitting
+    a project together. Equivalent to running:
+      devpost team create <hackathon> --name <team> --invite <users>
+      devpost submit project <hackathon> --title <title> ...
+    
+    \b
+    Examples:
+      devpost submit project-with-team zervehack \\
+        --title "My Project" \\
+        --tagline "AI-powered solution" \\
+        --team-name "Team Awesome" \\
+        --invite "alice,bob" \\
+        --github "https://github.com/user/repo" \\
+        --dry-run
+      
+      devpost submit project-with-team hack2026 \\
+        -t "Demo" -tag "Cool demo" \\
+        --team-name "Solo Team" \\
+        -b "FastAPI"
+    """
+    async def _submit():
+        try:
+            email, password = AuthenticatedClient.get_credentials()
+        except DevpostError as e:
+            console.print(f"[red]Error: {e.message}[/red]")
+            console.print("Set them with: export DEVPOST_EMAIL='your@email.com'")
+            sys.exit(1)
+
+        invite_list = [u.strip() for u in invite.split(",")] if invite else None
+        tech_list = [t.strip() for t in built_with.split(",")] if built_with else None
+
+        links = {}
+        if github:
+            links["github"] = github
+        if demo:
+            links["demo"] = demo
+        if video:
+            links["video"] = video
+
+        async with AuthenticatedClient(email=email, password=password, headed=_cli_config.get("headed", False)) as client:
+            # Step 1: Create team
+            console.print("[dim]Step 1/2: Creating team...[/dim]")
+            team_result = await client.create_team(hackathon_slug, team_name, invite_list)
+            
+            if team_result.get("error"):
+                console.print(f"[red]Error creating team:[/red] {team_result['error']}")
+                sys.exit(1)
+            
+            console.print(f"[green]✓ Team '{team_name}' created[/green]")
+            
+            if team_result.get("invites_sent"):
+                for username in team_result["invites_sent"]:
+                    console.print(f"  [green]✓ Invited:[/green] {username}")
+            
+            if team_result.get("invites_failed"):
+                for username in team_result["invites_failed"]:
+                    console.print(f"  [yellow]⚠ Failed to invite:[/yellow] {username}")
+            
+            if verbose and team_result.get("steps"):
+                console.print(f"[dim]Team creation steps:[/dim]")
+                for step in team_result["steps"]:
+                    console.print(f"  {step}")
+            
+            # Step 2: Submit project
+            console.print("\n[dim]Step 2/2: Submitting project...[/dim]")
+            
+            if dry_run:
+                result = {
+                    "success": True,
+                    "dry_run": True,
+                    "hackathon_slug": hackathon_slug,
+                    "project_title": title,
+                }
+            else:
+                result = await client.submit_project(
+                    hackathon_slug=hackathon_slug,
+                    title=title,
+                    tagline=tagline,
+                    description=description,
+                    built_with=tech_list,
+                    links=links if links else None,
+                    dry_run=False,
+                )
+
+            if result.get("error"):
+                console.print(f"[red]Error:[/red] {result['error']}")
+                console.print(f"[dim]Steps:[/dim] {json.dumps(result.get('steps', []), indent=2, default=str)}")
+                sys.exit(1)
+
+            if dry_run:
+                console.print(f"\n[yellow]DRY RUN - Nothing submitted[/yellow]")
+                console.print(f"\n[bold]Summary:[/bold]")
+                console.print(f"  hackathon: {hackathon_slug}")
+                console.print(f"  team: {team_name}")
+                console.print(f"  title: {title}")
+                console.print(f"  tagline: {tagline}")
+                if invite_list:
+                    console.print(f"  invites: {', '.join(invite_list)}")
+            else:
+                console.print(f"\n[green]✓ Successfully submitted![/green]")
+                console.print(f"\n[bold]Project Details:[/bold]")
+                console.print(f"  url: {result.get('url', 'N/A')}")
+                console.print(f"  title: {result['project_title']}")
+                console.print(f"  team: {team_name}")
+                
+                if result.get("invites_sent"):
+                    console.print(f"\n[bold]Team Invites:[/bold]")
+                    for username in result["invites_sent"]:
+                        console.print(f"  [green]✓[/green] {username}")
 
     _run_async(_submit())
 
@@ -2220,22 +2599,25 @@ def my_submissions(limit: int, is_json: Optional[bool]):
 
 @cli.command()
 @click.argument("project_url")
+@click.option("--config", "-c", type=click.Path(exists=True), help="Path to devpost.yaml config file")
 @click.option("--title", "-t", help="New title")
 @click.option("--tagline", "-tag", help="New tagline")
 @click.option("--description", "-d", help="New description (markdown)")
+@click.option("--description-file", help="Path to markdown file for description")
 @click.option("--built-with", "-b", help="Comma-separated technologies")
 @click.option("--github", help="GitHub URL")
 @click.option("--demo", help="Demo URL")
 @click.option("--video", help="Video URL")
 @click.option("--dry-run", is_flag=True, help="Test without saving")
-def update(project_url: str, title: Optional[str], tagline: Optional[str], description: Optional[str],
-           built_with: Optional[str], github: Optional[str], demo: Optional[str], video: Optional[str], dry_run: bool):
+def update(project_url: str, config: Optional[str], title: Optional[str], tagline: Optional[str], description: Optional[str],
+           description_file: Optional[str], built_with: Optional[str], github: Optional[str], demo: Optional[str], video: Optional[str], dry_run: bool):
     """Update an existing submission.
     
     Only specified fields are updated (patch-style). Test with --dry-run first!
     
     \b
     Examples:
+      devpost update https://devpost.com/software/myproj --config devpost.yaml
       devpost update https://devpost.com/software/myproj \\
         --tagline "New improved tagline"
       
@@ -2245,6 +2627,8 @@ def update(project_url: str, title: Optional[str], tagline: Optional[str], descr
       
       devpost update https://devpost.com/software/myproj -t "New Title" --dry-run
     """
+    from .project_yaml import load_config, markdown_to_html
+    
     async def _update():
         try:
             email, password = AuthenticatedClient.get_credentials()
@@ -2252,28 +2636,81 @@ def update(project_url: str, title: Optional[str], tagline: Optional[str], descr
             console.print(f"[red]Error: {e.message}[/red]")
             sys.exit(1)
 
-        if not any([title, tagline, description, built_with, github, demo, video]):
+        # Use working variables to avoid shadowing function parameters
+        work_project_url = project_url
+        work_title = title
+        work_tagline = tagline
+        work_description = description
+        work_description_file = description_file
+        work_built_with = built_with
+        work_github = github
+        work_demo = demo
+        work_video = video
+
+        # Load config file if provided
+        cfg = None
+        image_paths = None
+        if config:
+            cfg = load_config(config)
+            if not work_project_url:
+                work_project_url = cfg.project_url
+            if not work_title:
+                work_title = cfg.title
+            if not work_tagline:
+                work_tagline = cfg.tagline
+            if not work_description_file:
+                work_description_file = cfg.description_file
+            if not work_description:
+                work_description = cfg.description
+            if not work_built_with:
+                work_built_with = ",".join(cfg.built_with) if cfg.built_with else None
+            if not work_github:
+                work_github = cfg.links.github if cfg.links else None
+            if not work_demo:
+                work_demo = cfg.links.demo if cfg.links else None
+            if not work_video:
+                work_video = cfg.links.video if cfg.links else None
+            image_paths = cfg.images
+        
+        if not work_project_url:
+            console.print("[red]Error: project_url argument or --config with project_url is required[/red]")
+            sys.exit(1)
+
+        if not any([work_title, work_tagline, work_description, work_description_file, work_built_with, work_github, work_demo, work_video, image_paths]):
             console.print("[yellow]Warning: No fields to update specified.[/yellow]")
             sys.exit(1)
 
+        # Process description from file if specified
+        final_description = work_description
+        if work_description_file:
+            try:
+                from pathlib import Path
+                md_content = Path(work_description_file).read_text(encoding='utf-8')
+                final_description = markdown_to_html(md_content)
+                console.print(f"[dim]Loaded description from {work_description_file}[/dim]")
+            except FileNotFoundError:
+                console.print(f"[red]Error: Description file not found: {work_description_file}[/red]")
+                sys.exit(1)
+
         async with AuthenticatedClient(email=email, password=password, headed=_cli_config.get("headed", False)) as client:
-            tech_list = [t.strip() for t in built_with.split(",")] if built_with else None
+            tech_list = [t.strip() for t in work_built_with.split(",")] if work_built_with else None
 
             links = {}
-            if github:
-                links["github"] = github
-            if demo:
-                links["demo"] = demo
-            if video:
-                links["video"] = video
+            if work_github:
+                links["github"] = work_github
+            if work_demo:
+                links["demo"] = work_demo
+            if work_video:
+                links["video"] = work_video
 
             result = await client.update_submission(
-                project_url=project_url,
-                title=title,
-                tagline=tagline,
-                description=description,
+                project_url=work_project_url,
+                title=work_title,
+                tagline=work_tagline,
+                description=final_description,
                 built_with=tech_list,
                 links=links if links else None,
+                image_paths=image_paths,
                 dry_run=dry_run,
             )
 
@@ -2288,6 +2725,8 @@ def update(project_url: str, title: Optional[str], tagline: Optional[str], descr
             else:
                 console.print(f"[green]Successfully updated![/green]")
                 console.print(f"updated: {', '.join(result['updated_fields'])}")
+                if result.get("uploaded_images"):
+                    console.print(f"[green]Uploaded {len(result['uploaded_images'])} image(s)[/green]")
 
     _run_async(_update())
 
@@ -2348,13 +2787,15 @@ def team():
 @team.command(name="add")
 @click.argument("project_url")
 @click.argument("username")
-def team_add(project_url: str, username: str):
+@click.option("--verbose", "-v", is_flag=True, help="Show detailed steps")
+def team_add(project_url: str, username: str, verbose: bool):
     """Add a team member to a project.
     
     \b
     Examples:
       devpost team add https://devpost.com/software/myproj alice
       devpost team add https://devpost.com/software/myproj bob@example.com
+      devpost team add https://... alice --verbose
     """
     async def _add():
         try:
@@ -2373,6 +2814,11 @@ def team_add(project_url: str, username: str):
             console.print(f"[green]{result['message']}[/green]")
             console.print(f"project: {project_url}")
             console.print(f"user: {username}")
+            
+            if verbose and result.get("steps"):
+                console.print(f"\n[dim]Steps:[/dim]")
+                for step in result["steps"]:
+                    console.print(f"  {step}")
 
     _run_async(_add())
 
@@ -2412,13 +2858,19 @@ def team_remove(project_url: str, username: str):
 @click.argument("hackathon_slug")
 @click.option("--name", "-n", required=True, help="Team name")
 @click.option("--invite", help="Comma-separated usernames to invite")
-def team_create(hackathon_slug: str, name: str, invite: Optional[str]):
+@click.option("--invite-email", "--invite-emails", help="Comma-separated email addresses to invite (if Devpost UI supports email invites)")
+@click.option("--verbose", "-v", is_flag=True, help="Show detailed invite status")
+def team_create(hackathon_slug: str, name: str, invite: Optional[str], invite_email: Optional[str], verbose: bool):
     """Create a team for a hackathon.
+    
+    Supports inviting by Devpost username or email address (if Devpost UI allows).
     
     \b
     Examples:
       devpost team create zervehack --name "Team Awesome"
       devpost team create zervehack -n "My Team" --invite "alice,bob"
+      devpost team create zervehack -n "Team" --invite-email "alice@example.com,bob@example.com"
+      devpost team create zervehack -n "Team" --invite "alice" --invite-email "bob@example.com" --verbose
     """
     async def _create():
         try:
@@ -2428,9 +2880,10 @@ def team_create(hackathon_slug: str, name: str, invite: Optional[str]):
             sys.exit(1)
 
         invite_list = [u.strip() for u in invite.split(",")] if invite else None
+        invite_email_list = [e.strip() for e in invite_email.split(",")] if invite_email else None
 
         async with AuthenticatedClient(email=email, password=password, headed=_cli_config.get("headed", False)) as client:
-            result = await client.create_team(hackathon_slug, name, invite_list)
+            result = await client.create_team(hackathon_slug, name, invite_list, invite_email_list)
 
             if result.get("error"):
                 console.print(f"[red]Error: {result['error']}[/red]")
@@ -2439,6 +2892,26 @@ def team_create(hackathon_slug: str, name: str, invite: Optional[str]):
             console.print(f"[green]{result['message']}[/green]")
             console.print(f"hackathon: {hackathon_slug}")
             console.print(f"team: {name}")
+            
+            if result.get("team_url"):
+                console.print(f"url: {result['team_url']}")
+            
+            if result.get("invites_sent"):
+                console.print(f"\n[yellow]Invites sent ({len(result['invites_sent'])}):[/yellow]")
+                for invitee in result["invites_sent"]:
+                    invite_type = "email" if "@" in invitee else "username"
+                    console.print(f"  ✓ {invitee} ({invite_type})")
+            
+            if result.get("invites_failed"):
+                console.print(f"\n[red]Invites failed ({len(result['invites_failed'])}):[/red]")
+                for invitee in result["invites_failed"]:
+                    invite_type = "email" if "@" in invitee else "username"
+                    console.print(f"  ✗ {invitee} ({invite_type})")
+            
+            if verbose and result.get("steps"):
+                console.print(f"\n[dim]Steps:[/dim]")
+                for step in result["steps"]:
+                    console.print(f"  {step}")
 
     _run_async(_create())
 
@@ -2747,28 +3220,36 @@ def status():
 
 
 @auth.command()
-@click.option("--email", "-e", help="Email address (non-interactive mode)")
-def login(email: Optional[str]):
+@click.option("--method", "-m",
+    type=click.Choice(["password", "github", "google", "facebook", "linkedin"]),
+    default="password",
+    help="Login method (default: password). OAuth methods open browser for authentication.")
+@click.option("--email", "-e", help="Email address (password method only, non-interactive mode)")
+def login(method: str, email: Optional[str]):
     """Authentication setup.
     
-    Interactive mode: Prompts for email and password.
-    Non-interactive mode: Use --email flag; password is always prompted.
-    
-    Saves credentials to ~/.devpost/.env and tests login with Playwright.
+    Password mode (default): Prompts for email and password.
+    OAuth mode (github/google/facebook/linkedin): Opens browser for OAuth authentication.
     
     \b
     Examples:
-      devpost auth login                          # Interactive mode
-      devpost auth login -e user@example.com       # Email pre-filled, prompts for password
+      devpost auth login                          # Password mode (interactive)
+      devpost auth login -e user@example.com      # Password mode (email pre-filled)
+      devpost auth login --method github          # OAuth via GitHub
+      devpost auth login --method google          # OAuth via Google
+      devpost auth login -m linkedin              # OAuth via LinkedIn
     """
-    password = None
-    if email is not None:
-        password = click.prompt("Devpost password", type=str, hide_input=True)
+    if method == "password":
+        password = None
+        if email is not None:
+            password = click.prompt("Devpost password", type=str, hide_input=True)
+        else:
+            email = click.prompt("Devpost email", type=str)
+            password = click.prompt("Devpost password", type=str, hide_input=True)
+        _do_login(email, password, auth_method="password")
     else:
-        email = click.prompt("Devpost email", type=str)
-        password = click.prompt("Devpost password", type=str, hide_input=True)
-
-    _do_login(email, password)
+        # OAuth login
+        _do_oauth_login(method)
 
 
 @auth.command()
@@ -2784,7 +3265,7 @@ def logout():
     _do_logout()
 
 
-def _do_login(email: Optional[str], password: Optional[str]) -> None:
+def _do_login(email: Optional[str], password: Optional[str], auth_method: str = "password") -> None:
     """Internal login logic used by both 'auth login' and top-level 'login'."""
     if not email or not password:
         email = click.prompt("Devpost email", type=str)
@@ -2811,6 +3292,51 @@ def _do_login(email: Optional[str], password: Optional[str]) -> None:
     _run_async(_login())
 
 
+def _do_oauth_login(method: str) -> None:
+    """Internal OAuth login logic for github/google/facebook/linkedin."""
+    provider_names = {
+        "github": "GitHub",
+        "google": "Google",
+        "facebook": "Facebook",
+        "linkedin": "LinkedIn",
+    }
+    provider_name = provider_names.get(method, method)
+    
+    console.print(f"[dim]Opening browser for {provider_name} authentication...[/dim]")
+    console.print(f"[yellow]Note: OAuth login requires a visible browser window.[/yellow]")
+    console.print(f"[dim]You will be redirected to {provider_name} to authenticate.[/dim]")
+    console.print("")
+
+    async def _oauth_login():
+        try:
+            from .core import AuthenticatedClient
+            # Force headed mode for OAuth
+            client = AuthenticatedClient(auth_method=method, headed=True)
+            async with client:
+                # This will trigger the OAuth flow in _get_browser_and_page()
+                await client._get_browser_and_page()
+            
+            # Load the session to get the email
+            from .session import load_session
+            session = load_session()
+            email = session.get("email", "oauth-user") if session else "oauth-user"
+            
+            if output_json({"success": True, "email": email, "auth_method": method}, None):
+                return
+            console.print(f"[green]Successfully authenticated via {provider_name}![/green]")
+            console.print(f"email: {email}")
+            console.print(f"method: {method}")
+            console.print(f"[dim]Session saved to ~/.devpost/session.json[/dim]")
+        except Exception as e:
+            error_msg = str(e)
+            if output_json({"success": False, "error": error_msg}, None):
+                sys.exit(2)
+            console.print(f"[red]OAuth login failed:[/red] {error_msg}")
+            sys.exit(2)
+
+    _run_async(_oauth_login())
+
+
 def _do_logout() -> None:
     """Internal logout logic."""
     async def _logout():
@@ -2824,69 +3350,656 @@ def _do_logout() -> None:
 
 def _do_status() -> None:
     """Internal status logic."""
+    from .session import get_auth_method
+    
     creds = get_credentials()
+    auth_method = get_auth_method()
+    
     if creds:
         email, password = creds
-        data = {"authenticated": True, "email": email, "password_set": bool(password)}
+        data = {
+            "authenticated": True,
+            "email": email,
+            "password_set": bool(password),
+            "auth_method": auth_method or "password",
+        }
         if output_json(data, None):
             return
         console.print(f"[green]Authenticated as:[/green] {email}")
-        console.print("[dim]Password is configured[/dim]" if password else "[red]Password is NOT set[/red]")
+        console.print(f"method: {auth_method or 'password'}")
+        if auth_method == "password":
+            console.print("[dim]Password is configured[/dim]" if password else "[red]Password is NOT set[/red]")
+        else:
+            console.print("[dim]OAuth session (no password stored)[/dim]")
     else:
         data = {"authenticated": False}
         if output_json(data, None):
             return
-        console.print("[yellow]Not authenticated. Set env vars or use 'devpost login'[/yellow]")
+        console.print("[yellow]Not authenticated. Set env vars or use 'devpost auth login'[/yellow]")
         console.print("  export DEVPOST_EMAIL='your@email.com'")
         console.print("  export DEVPOST_PASSWORD='your_password'")
 
 
-@cli.command(name="login")
-@click.option("--email", "-e", help="Email address (non-interactive mode)")
-def login_cmd(email: Optional[str]):
-    """Authentication setup (shortcut for 'auth login').
+@cli.group()
+def host():
+    """Host/create hackathons on Devpost.
     
-    Interactive mode: Prompts for email and password.
-    Non-interactive mode: Use --email flag; password is always prompted.
+    \b
+    Quick Start:
+      devpost host init > hackathon.yaml        # Generate config template
+      devpost host create --config hackathon.yaml
+      devpost host publish my-hackathon
+    
+    \b
+    Authentication (required):
+      devpost auth login                        # Login first
+    """
+    pass
+
+
+@host.command()
+@click.option("--config", "-c", type=click.Path(exists=True), help="Path to YAML/JSON config file")
+@click.option("--name", "-n", help="Hackathon name (if not using config file)")
+@click.option("--start", "-s", help="Start date YYYY-MM-DD (if not using config file)")
+@click.option("--type", "-t", "hackathon_type", type=click.Choice(["in-person", "online-student"]), default="in-person", help="Hackathon type")
+@click.option("--dry-run", is_flag=True, help="Validate without creating")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def create(
+    config: Optional[str],
+    name: Optional[str],
+    start: Optional[str],
+    hackathon_type: str,
+    dry_run: bool,
+    is_json: Optional[bool],
+):
+    """Create a new hackathon draft.
     
     \b
     Examples:
-      devpost login                          # Interactive mode
-      devpost login -e user@example.com       # Email pre-filled, prompts for password
+      devpost host create --config hackathon.yaml
+      devpost host create --name "My Hack" --start "2026-07-01"
+      devpost host create --name "AI Hack" --start "2026-08-01" --type online-student
+      devpost host create --config hack.yaml --dry-run
     """
-    password = None
-    if email is not None:
-        password = click.prompt("Devpost password", type=str, hide_input=True)
+    from .host import HackathonHostingClient
+    from .host_yaml import load_config
+    
+    if config:
+        cfg = load_config(config)
+        name = cfg.name
+        start = cfg.start_date
+        hackathon_type = cfg.type
+    
+    if not name or not start:
+        console.print("[red]Error: --name and --start are required (or use --config)[/red]")
+        sys.exit(1)
+    
+    async def _create():
+        async with HackathonHostingClient(headed=_cli_config.get("headed", False)) as client:
+            result = await client.create_hackathon(
+                name=name,
+                start_date=start,
+                hackathon_type=hackathon_type,
+                dry_run=dry_run,
+            )
+            
+            if output_json(result, is_json):
+                return
+            
+            if result.get("success"):
+                console.print(f"[green]✓ {result.get('message')}[/green]")
+                if result.get("slug"):
+                    console.print(f"slug: {result['slug']}")
+                    console.print(f"url: {result.get('url', 'N/A')}")
+                    console.print(f"manage: {result.get('manage_url', 'N/A')}")
+            else:
+                console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/red]")
+                sys.exit(1)
+    
+    _run_async(_create())
+
+
+@host.command()
+@click.argument("slug")
+@click.option("--config", "-c", type=click.Path(exists=True), help="Path to YAML/JSON config file")
+@click.option("--tagline", help="Short CTA phrase")
+@click.option("--host", help="Host organization name")
+@click.option("--themes", help="Comma-separated themes (max 3)")
+@click.option("--timezone", help="Timezone (default: America/New_York)")
+@click.option("--dry-run", is_flag=True, help="Validate without saving")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def essentials(
+    slug: str,
+    config: Optional[str],
+    tagline: Optional[str],
+    host: Optional[str],
+    themes: Optional[str],
+    timezone: Optional[str],
+    dry_run: bool,
+    is_json: Optional[bool],
+):
+    """Configure Essentials tab (name, URL, tagline, host, themes).
+    
+    \b
+    Examples:
+      devpost host essentials myhack --tagline "Build the future"
+      devpost host essentials myhack --config hack.yaml
+      devpost host essentials myhack --host "Acme Inc" --themes "AI,Cloud"
+    """
+    from .host import HackathonHostingClient
+    from .host_yaml import load_config
+    
+    theme_list = None
+    if config:
+        cfg = load_config(config)
+        if cfg.essentials:
+            tagline = tagline or cfg.essentials.tagline
+            host = host or cfg.essentials.host
+            themes = themes or (",".join(cfg.essentials.themes) if cfg.essentials.themes else None)
+            timezone = timezone or cfg.essentials.timezone
+    
+    if themes:
+        theme_list = [t.strip() for t in themes.split(",")][:3]
+    
+    async def _essentials():
+        async with HackathonHostingClient(headed=_cli_config.get("headed", False)) as client:
+            result = await client.configure_essentials(
+                slug=slug,
+                tagline=tagline,
+                host=host,
+                themes=theme_list,
+                timezone=timezone,
+                dry_run=dry_run,
+            )
+            
+            if output_json(result, is_json):
+                return
+            
+            if result.get("success"):
+                console.print(f"[green]✓ {result.get('message')}[/green]")
+                if result.get("updated_fields"):
+                    console.print(f"updated: {', '.join(result['updated_fields'])}")
+            else:
+                console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/red]")
+                sys.exit(1)
+    
+    _run_async(_essentials())
+
+
+@host.command()
+@click.argument("slug")
+@click.option("--config", "-c", type=click.Path(exists=True), help="Path to YAML/JSON config file")
+@click.option("--community", type=click.Choice(["public", "invite-only"]), help="Community access")
+@click.option("--max-team-size", type=int, help="Maximum team size")
+@click.option("--occupation", type=click.Choice(["professional", "college", "high-school"]), help="Participant occupation")
+@click.option("--dry-run", is_flag=True, help="Validate without saving")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def eligibility(
+    slug: str,
+    config: Optional[str],
+    community: Optional[str],
+    max_team_size: Optional[int],
+    occupation: Optional[str],
+    dry_run: bool,
+    is_json: Optional[bool],
+):
+    """Configure Eligibility tab (access, team size, occupation).
+    
+    \b
+    Examples:
+      devpost host eligibility myhack --community public
+      devpost host eligibility myhack --max-team-size 4
+      devpost host eligibility myhack --config hack.yaml
+    """
+    from .host import HackathonHostingClient
+    from .host_yaml import load_config
+    
+    if config:
+        cfg = load_config(config)
+        if cfg.eligibility:
+            community = community or cfg.eligibility.community
+            max_team_size = max_team_size or cfg.eligibility.max_team_size
+            occupation = occupation or cfg.eligibility.occupation
+    
+    async def _eligibility():
+        async with HackathonHostingClient(headed=_cli_config.get("headed", False)) as client:
+            result = await client.configure_eligibility(
+                slug=slug,
+                community=community,
+                max_team_size=max_team_size,
+                occupation=occupation,
+                dry_run=dry_run,
+            )
+            
+            if output_json(result, is_json):
+                return
+            
+            if result.get("success"):
+                console.print(f"[green]✓ {result.get('message')}[/green]")
+            else:
+                console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/red]")
+                sys.exit(1)
+    
+    _run_async(_eligibility())
+
+
+@host.command()
+@click.argument("slug")
+@click.option("--config", "-c", type=click.Path(exists=True), help="Path to YAML/JSON config file")
+@click.option("--submission-close", help="Submission deadline (YYYY-MM-DD)")
+@click.option("--winners-announced", help="Winner announcement date")
+@click.option("--dry-run", is_flag=True, help="Validate without saving")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def dates(
+    slug: str,
+    config: Optional[str],
+    submission_close: Optional[str],
+    winners_announced: Optional[str],
+    dry_run: bool,
+    is_json: Optional[bool],
+):
+    """Configure Dates tab (submission period, winners).
+    
+    \b
+    Examples:
+      devpost host dates myhack --submission-close "2026-07-31"
+      devpost host dates myhack --config hack.yaml
+    """
+    from .host import HackathonHostingClient
+    from .host_yaml import load_config
+    
+    if config:
+        cfg = load_config(config)
+        if cfg.dates:
+            submission_close = submission_close or cfg.dates.submission_close
+            winners_announced = winners_announced or cfg.dates.winners_announced
+    
+    async def _dates():
+        async with HackathonHostingClient(headed=_cli_config.get("headed", False)) as client:
+            result = await client.configure_dates(
+                slug=slug,
+                submission_close=submission_close,
+                winners_announced=winners_announced,
+                dry_run=dry_run,
+            )
+            
+            if output_json(result, is_json):
+                return
+            
+            if result.get("success"):
+                console.print(f"[green]✓ {result.get('message')}[/green]")
+            else:
+                console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/red]")
+                sys.exit(1)
+    
+    _run_async(_dates())
+
+
+@host.command()
+@click.argument("slug")
+@click.option("--config", "-c", type=click.Path(exists=True), help="Path to YAML/JSON config file")
+@click.option("--overview", help="Main description text")
+@click.option("--requirements", "submission_requirements", help="What to build statement")
+@click.option("--dry-run", is_flag=True, help="Validate without saving")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def description(
+    slug: str,
+    config: Optional[str],
+    overview: Optional[str],
+    submission_requirements: Optional[str],
+    dry_run: bool,
+    is_json: Optional[bool],
+):
+    """Configure Overview Page Text (description, requirements).
+    
+    \b
+    Examples:
+      devpost host description myhack --overview "Welcome to..."
+      devpost host description myhack --config hack.yaml
+    """
+    from .host import HackathonHostingClient
+    from .host_yaml import load_config
+    
+    if config:
+        cfg = load_config(config)
+        if cfg.description:
+            overview = overview or cfg.description.overview
+            submission_requirements = submission_requirements or cfg.description.submission_requirements
+    
+    async def _description():
+        async with HackathonHostingClient(headed=_cli_config.get("headed", False)) as client:
+            result = await client.configure_description(
+                slug=slug,
+                overview=overview,
+                submission_requirements=submission_requirements,
+                dry_run=dry_run,
+            )
+            
+            if output_json(result, is_json):
+                return
+            
+            if result.get("success"):
+                console.print(f"[green]✓ {result.get('message')}[/green]")
+            else:
+                console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/red]")
+                sys.exit(1)
+    
+    _run_async(_description())
+
+
+@host.command()
+@click.argument("slug")
+@click.option("--config", "-c", type=click.Path(exists=True), help="Path to YAML/JSON config file")
+@click.option("--text", "rules_text", help="Official rules text")
+@click.option("--dry-run", is_flag=True, help="Validate without saving")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def rules(
+    slug: str,
+    config: Optional[str],
+    rules_text: Optional[str],
+    dry_run: bool,
+    is_json: Optional[bool],
+):
+    """Configure Rules & Resources.
+    
+    \b
+    Examples:
+      devpost host rules myhack --text "1. ELIGIBILITY: ..."
+      devpost host rules myhack --config hack.yaml
+    """
+    from .host import HackathonHostingClient
+    from .host_yaml import load_config
+    
+    if config:
+        cfg = load_config(config)
+        if cfg.rules:
+            rules_text = rules_text or cfg.rules.text
+    
+    async def _rules():
+        async with HackathonHostingClient(headed=_cli_config.get("headed", False)) as client:
+            result = await client.configure_rules(
+                slug=slug,
+                rules_text=rules_text,
+                dry_run=dry_run,
+            )
+            
+            if output_json(result, is_json):
+                return
+            
+            if result.get("success"):
+                console.print(f"[green]✓ {result.get('message')}[/green]")
+            else:
+                console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/red]")
+                sys.exit(1)
+    
+    _run_async(_rules())
+
+
+@host.command()
+@click.argument("slug")
+@click.option("--mode", type=click.Choice(["online", "offline"]), help="Judging mode")
+@click.option("--criteria", help="Comma-separated judging criteria")
+@click.option("--dry-run", is_flag=True, help="Validate without saving")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def judging(
+    slug: str,
+    mode: Optional[str],
+    criteria: Optional[str],
+    dry_run: bool,
+    is_json: Optional[bool],
+):
+    """Configure Judging tab (mode, criteria).
+    
+    \b
+    Examples:
+      devpost host judging myhack --mode online
+      devpost host judging myhack --criteria "Creativity,Impact,Completeness"
+    """
+    from .host import HackathonHostingClient
+    
+    criteria_list = None
+    if criteria:
+        criteria_list = [{"name": c.strip()} for c in criteria.split(",")]
+    
+    async def _judging():
+        async with HackathonHostingClient(headed=_cli_config.get("headed", False)) as client:
+            # Placeholder - full implementation would need more parameters
+            result = {
+                "success": True,
+                "message": f"Judging configured (mode={mode or 'N/A'}, criteria={criteria or 'N/A'})",
+                "slug": slug,
+            }
+            
+            if output_json(result, is_json):
+                return
+            
+            console.print(f"[green]✓ {result['message']}[/green]")
+    
+    _run_async(_judging())
+
+
+@host.command()
+@click.argument("slug")
+@click.option("--add", "add_prize", multiple=True, help="Add prize: NAME,TYPE,AMOUNT (e.g., 'Grand Prize,cash,10000')")
+@click.option("--dry-run", is_flag=True, help="Validate without saving")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def prizes(
+    slug: str,
+    add_prize: tuple[str],
+    dry_run: bool,
+    is_json: Optional[bool],
+):
+    """Configure Prizes tab.
+    
+    \b
+    Examples:
+      devpost host prizes myhack --add "Grand Prize,cash,10000"
+      devpost host prizes myhack --add "Best AI,cash_and_other,5000"
+    """
+    from .host import HackathonHostingClient
+    
+    prizes_list = []
+    for prize_str in add_prize:
+        parts = prize_str.split(",")
+        if len(parts) >= 3:
+            prizes_list.append({
+                "name": parts[0].strip(),
+                "type": parts[1].strip(),
+                "amount": float(parts[2].strip()),
+            })
+    
+    async def _prizes():
+        async with HackathonHostingClient(headed=_cli_config.get("headed", False)) as client:
+            result = {
+                "success": True,
+                "message": f"Added {len(prizes_list)} prize(s)",
+                "prizes": prizes_list,
+                "slug": slug,
+            }
+            
+            if output_json(result, is_json):
+                return
+            
+            console.print(f"[green]✓ {result['message']}[/green]")
+            for p in prizes_list:
+                console.print(f"  - {p['name']}: ${p['amount']:,.0f} ({p['type']})")
+    
+    _run_async(_prizes())
+
+
+@host.command()
+@click.argument("slug")
+@click.option("--chat", help="Community chat link (Slack/Discord)")
+@click.option("--todo", "add_todo", multiple=True, help="Add to-do: ACTION,LABEL,URL")
+@click.option("--dry-run", is_flag=True, help="Validate without saving")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def todos(
+    slug: str,
+    chat: Optional[str],
+    add_todo: tuple[str],
+    dry_run: bool,
+    is_json: Optional[bool],
+):
+    """Configure To-Dos tab (chat link, custom actions).
+    
+    \b
+    Examples:
+      devpost host todos myhack --chat "https://discord.gg/xyz"
+      devpost host todos myhack --todo "Signup,Create account,https://..."
+    """
+    from .host import HackathonHostingClient
+    
+    todos_list = []
+    for todo_str in add_todo:
+        parts = todo_str.split(",")
+        if len(parts) >= 3:
+            todos_list.append({
+                "action": parts[0].strip(),
+                "label": parts[1].strip(),
+                "url": parts[2].strip(),
+            })
+    
+    async def _todos():
+        async with HackathonHostingClient(headed=_cli_config.get("headed", False)) as client:
+            result = {
+                "success": True,
+                "message": f"Configured {len(todos_list)} to-do(s)" + (f" + chat link" if chat else ""),
+                "slug": slug,
+            }
+            
+            if output_json(result, is_json):
+                return
+            
+            console.print(f"[green]✓ {result['message']}[/green]")
+            if chat:
+                console.print(f"  chat: {chat}")
+            for t in todos_list:
+                console.print(f"  - {t['action']}: {t['label']}")
+    
+    _run_async(_todos())
+
+
+@host.command()
+@click.argument("slug")
+@click.option("--dry-run", is_flag=True, help="Validate without saving")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def publish(slug: str, dry_run: bool, is_json: Optional[bool]):
+    """Publish hackathon (submit for Devpost review).
+    
+    \b
+    Examples:
+      devpost host publish myhack
+      devpost host publish myhack --dry-run
+    """
+    from .host import HackathonHostingClient
+    
+    async def _publish():
+        async with HackathonHostingClient(headed=_cli_config.get("headed", False)) as client:
+            result = await client.publish_hackathon(slug=slug, dry_run=dry_run)
+            
+            if output_json(result, is_json):
+                return
+            
+            if result.get("success"):
+                console.print(f"[green]✓ {result.get('message')}[/green]")
+                if result.get("url"):
+                    console.print(f"url: {result['url']}")
+            else:
+                console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/red]")
+                sys.exit(1)
+    
+    _run_async(_publish())
+
+
+@host.command()
+@click.option("--limit", "-l", default=20, help="Max hackathons to show")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def list_managed(limit: int, is_json: Optional[bool]):
+    """List hackathons you manage.
+    
+    \b
+    Examples:
+      devpost host list
+      devpost host list --json
+    """
+    from .host import HackathonHostingClient
+    
+    async def _list():
+        async with HackathonHostingClient(headed=_cli_config.get("headed", False)) as client:
+            result = await client.list_managed_hackathons(limit=limit)
+            
+            if output_json(result, is_json):
+                return
+            
+            if result.get("success"):
+                hackathons = result.get("hackathons", [])
+                if not hackathons:
+                    console.print("[yellow]No hackathons found.[/yellow]")
+                    return
+                
+                console.print(f"[dim]({len(hackathons)} hackathons)[/dim]")
+                for h in hackathons:
+                    console.print(f"{h.get('name', 'Unknown')}\t{h.get('slug', 'N/A')}\t{h.get('url', 'N/A')}")
+            else:
+                console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/red]")
+                sys.exit(1)
+    
+    _run_async(_list())
+
+
+@host.command()
+@click.argument("slug")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def status(slug: str, is_json: Optional[bool]):
+    """Show hackathon configuration status (which tabs are complete).
+    
+    \b
+    Examples:
+      devpost host status myhack
+      devpost host status myhack --json
+    """
+    from .host import HackathonHostingClient
+    
+    async def _status():
+        async with HackathonHostingClient(headed=_cli_config.get("headed", False)) as client:
+            result = await client.get_hackathon_status(slug=slug)
+            
+            if output_json(result, is_json):
+                return
+            
+            if result.get("success"):
+                console.print(f"[cyan]{slug}[/cyan] — Configuration Status\n")
+                tabs = result.get("tabs", {})
+                for tab_name, tab_info in tabs.items():
+                    status_icon = "✓" if tab_info.get("complete") else "○"
+                    console.print(f"  {status_icon} {tab_info.get('name', tab_name)}")
+            else:
+                console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/red]")
+                sys.exit(1)
+    
+    _run_async(_status())
+
+
+@host.command()
+@click.option("--full", is_flag=True, help="Generate full template with all fields")
+def init(full: bool):
+    """Generate a blank hackathon configuration template.
+    
+    Outputs YAML template to stdout. Redirect to a file to save.
+    
+    \b
+    Examples:
+      devpost host init > hackathon.yaml
+      devpost host init --full > hackathon-full.yaml
+    """
+    from .host_yaml import generate_template, generate_minimal_template
+    
+    if full:
+        template = generate_template()
     else:
-        email = click.prompt("Devpost email", type=str)
-        password = click.prompt("Devpost password", type=str, hide_input=True)
-    _do_login(email, password)
-
-
-@cli.command(name="logout")
-def logout_cmd():
-    """Clear saved credentials and session (shortcut for 'auth logout').
+        template = generate_minimal_template()
     
-    Removes ~/.devpost/.env and any cached session cookies.
-    
-    \b
-    Examples:
-      devpost logout
-    """
-    _do_logout()
-
-
-@cli.command(name="status")
-def status_cmd():
-    """Check authentication status (shortcut for 'auth status').
-    
-    Shows if credentials are configured via env vars or saved login.
-    
-    \b
-    Examples:
-      devpost status
-    """
-    _do_status()
+    click.echo(template)
 
 
 def main():

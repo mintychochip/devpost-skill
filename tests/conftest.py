@@ -109,9 +109,42 @@ def mock_project_html():
 @pytest.fixture
 def mock_devpost_api(respx_mock, mock_hackathon_api_response):
     """Mock Devpost API endpoints."""
+    # Main hackathons search endpoint
     respx_mock.get("https://devpost.com/api/hackathons", name="hackathons").mock(
         return_value=Response(200, json=mock_hackathon_api_response)
     )
+    
+    # Featured hackathons endpoints
+    respx_mock.get("https://devpost.com/api/hackathons/featured_hackathons", name="featured_online").mock(
+        return_value=Response(200, json={"hackathons": [{"id": 1, "title": "Featured Online", "open_state": "open"}]})
+    )
+    respx_mock.get(url__regex=r"https://devpost\.com/api/hackathons/featured_hackathons\?challenge_type=in-person", name="featured_in_person").mock(
+        return_value=Response(200, json={"hackathons": [{"id": 2, "title": "Featured In-Person", "open_state": "open"}]})
+    )
+    
+    # Recommended hackathons
+    respx_mock.get("https://devpost.com/api/hackathons/recommended_hackathons", name="recommended").mock(
+        return_value=Response(200, json={"hackathons": [{"id": 3, "title": "Recommended", "open_state": "open"}]})
+    )
+    
+    # Nearby hackathons
+    respx_mock.get("https://devpost.com/api/hackathons/nearby_hackathons", name="nearby").mock(
+        return_value=Response(200, json={"hackathons": [{"id": 4, "title": "Nearby", "open_state": "open"}]})
+    )
+    
+    # Organizations
+    respx_mock.get(url__regex=r"https://devpost\.com/api/organizations", name="organizations").mock(
+        return_value=Response(200, json=[{"id": 1, "name": "Test Org", "count": 10}])
+    )
+    
+    # Themes
+    respx_mock.get("https://devpost.com/api/themes", name="themes").mock(
+        return_value=Response(200, json=[{"name": "Test Theme"}])
+    )
+    respx_mock.get("https://devpost.com/api/themes/popular", name="themes_popular").mock(
+        return_value=Response(200, json={"themes": [{"id": 1, "name": "Popular Theme"}]})
+    )
+    
     return respx_mock
 
 

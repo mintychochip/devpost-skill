@@ -32,6 +32,19 @@ playwright install chromium
 | `devpost rss` | Hackathon feed | `--json` |
 | `devpost join <slug>` | Register for hackathon | (requires auth) |
 | `devpost submit project <slug>` | Submit project | `--title`, `--tagline`, `--dry-run` |
+| `devpost host create` | Create hackathon draft | `--config`, `--name`, `--start`, `--dry-run` |
+| `devpost host essentials <slug>` | Configure essentials | `--config`, `--tagline`, `--host`, `--themes` |
+| `devpost host eligibility <slug>` | Configure eligibility | `--config`, `--community`, `--max-team-size` |
+| `devpost host dates <slug>` | Configure dates | `--config`, `--submission-close` |
+| `devpost host description <slug>` | Configure description | `--config`, `--overview`, `--requirements` |
+| `devpost host rules <slug>` | Configure rules | `--config`, `--text` |
+| `devpost host judging <slug>` | Configure judging | `--mode`, `--criteria` |
+| `devpost host prizes <slug>` | Configure prizes | `--add "NAME,TYPE,AMOUNT"` |
+| `devpost host todos <slug>` | Configure to-dos | `--chat`, `--todo` |
+| `devpost host publish <slug>` | Publish hackathon | `--dry-run` |
+| `devpost host list` | List managed hackathons | `--json` |
+| `devpost host status <slug>` | Show config status | `--json` |
+| `devpost host init` | Generate config template | `--full` |
 | `devpost index build` | Build local search index | `--projects`, `--limit` |
 | `devpost index search <query>` | Search local index | `--type`, `--limit` |
 

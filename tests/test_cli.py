@@ -13,33 +13,66 @@ from devpost_cli import session
 class TestCLIPublicCommands:
     """Test public (no-auth) CLI commands."""
 
-    def test_list_json_output(self, mock_devpost_api):
-        """Test that list --json outputs valid JSON."""
+    def test_hackathons_json_output(self, mock_devpost_api):
+        """Test that hackathons --json outputs valid JSON."""
         runner = CliRunner()
-        result = runner.invoke(cli, ["list", "--limit", "2", "--json"])
+        result = runner.invoke(cli, ["hackathons", "--limit", "2", "--json"])
         
         assert result.exit_code == 0
         import json
         data = json.loads(result.output)
-        assert isinstance(data, list)
+        assert isinstance(data, dict)  # Now returns dict with 'hackathons' and 'meta'
 
-    def test_list_state_filter(self, mock_devpost_api):
-        """Test list --state filter."""
+    def test_hackathons_state_filter(self, mock_devpost_api):
+        """Test hackathons --state filter."""
         runner = CliRunner()
-        result = runner.invoke(cli, ["list", "--state", "open", "--limit", "2"])
+        result = runner.invoke(cli, ["hackathons", "--state", "open", "--limit", "2"])
         
         assert result.exit_code == 0
 
-    def test_info_slug(self, mock_hackathon_api_response):
-        """Test info command with slug."""
+    def test_overview_slug(self, mock_hackathon_api_response):
+        """Test overview command with slug."""
         with patch("devpost_cli.core.DevpostClient.get_hackathon_by_slug") as mock_get:
             mock_get.return_value = {"title": "Test", "url": "https://test.devpost.com/"}
             
             runner = CliRunner()
-            result = runner.invoke(cli, ["info", "test-hackathon"])
+            result = runner.invoke(cli, ["overview", "test-hackathon"])
             
             assert result.exit_code == 0
             assert "Test" in result.output
+
+    def test_details_command(self, mock_hackathon_api_response):
+        """Test consolidated details command."""
+        with patch("devpost_cli.core.DevpostClient.get_hackathon_by_slug") as mock_get:
+            mock_get.return_value = {"title": "Test", "url": "https://test.devpost.com/", "submission_period_dates": "Jan 1 - Jan 31"}
+            
+            runner = CliRunner()
+            result = runner.invoke(cli, ["details", "test-hackathon", "-s", "dates"])
+            
+            assert result.exit_code == 0
+            assert "dates" in result.output.lower()
+
+    def test_get_command_participants(self):
+        """Test get -t participants command."""
+        with patch("devpost_cli.core.DevpostClient.get_participants") as mock_get:
+            mock_get.return_value = {"success": True, "count": 2, "participants": [{"username": "alice", "name": "Alice", "url": "..."}]}
+            
+            runner = CliRunner()
+            result = runner.invoke(cli, ["get", "test-hackathon", "-t", "participants"])
+            
+            assert result.exit_code == 0
+            assert "alice" in result.output.lower()
+
+    def test_get_command_winners(self):
+        """Test get -t winners command."""
+        with patch("devpost_cli.core.DevpostClient.get_winners") as mock_get:
+            mock_get.return_value = {"success": True, "count": 1, "winners": [{"title": "Winner Project", "prize": "1st Place", "url": "..."}]}
+            
+            runner = CliRunner()
+            result = runner.invoke(cli, ["get", "test-hackathon", "-t", "winners"])
+            
+            assert result.exit_code == 0
+            assert "Winner" in result.output
 
     def test_search(self, mock_devpost_api):
         """Test search command - now searches projects."""
@@ -329,15 +362,15 @@ class TestCLINewCommands:
 
 
 class TestCLINewFeatureCommands:
-    """Test rules, winners, and evaluate CLI commands."""
+    """Test evaluate CLI command."""
 
-    def test_rules_command_json(self):
-        """Test devpost rules command with JSON output."""
+    def test_get_command_rules_json(self):
+        """Test devpost get -t rules command with JSON output."""
         rules_result = {
             "success": True, "slug": "test-hack",
             "url": "https://test-hack.devpost.com/rules",
             "eligibility": ["Must be 18+"],
-            "requirements": ["Use sponsor API"],
+            "requirements": ["Use sponsorAPI"],
             "judging_criteria": ["Innovation 40%"],
             "prize_categories": ["Grand Prize $10,000"],
             "key_dates": [], "sponsor_apis": [],
@@ -345,22 +378,15 @@ class TestCLINewFeatureCommands:
         with patch("devpost_cli.core.DevpostClient.parse_rules_page", new_callable=AsyncMock) as mock_rules:
             mock_rules.return_value = rules_result
             runner = CliRunner()
-            result = runner.invoke(cli, ["rules", "test-hack", "--json"])
+            result = runner.invoke(cli, ["get", "test-hack", "-t", "rules", "--json"])
             assert result.exit_code == 0
             import json
             data = json.loads(result.output)
             assert data["success"] is True
             assert data["eligibility"] == ["Must be 18+"]
 
-    def test_rules_command_help(self):
-        """Test rules command help text."""
-        runner = CliRunner()
-        result = runner.invoke(cli, ["rules", "--help"])
-        assert result.exit_code == 0
-        assert "rules" in result.output.lower()
-
-    def test_winners_command_json(self):
-        """Test devpost winners command with JSON output."""
+    def test_get_command_winners_json(self):
+        """Test devpost get -t winners command with JSON output."""
         winners_result = {
             "success": True, "slug": "test-hack",
             "winners": [
@@ -371,14 +397,14 @@ class TestCLINewFeatureCommands:
         with patch("devpost_cli.core.DevpostClient.get_winners", new_callable=AsyncMock) as mock_winners:
             mock_winners.return_value = winners_result
             runner = CliRunner()
-            result = runner.invoke(cli, ["winners", "test-hack", "--json"])
+            result = runner.invoke(cli, ["get", "test-hack", "-t", "winners", "--json"])
             assert result.exit_code == 0
             import json
             data = json.loads(result.output)
             assert data["count"] == 1
 
-    def test_winners_command_no_winners(self):
-        """Test winners command when no winners found."""
+    def test_get_command_winners_no_winners(self):
+        """Test get -t winners command when no winners found."""
         winners_result = {
             "success": True, "slug": "test-hack",
             "winners": [], "count": 0,
@@ -387,9 +413,16 @@ class TestCLINewFeatureCommands:
         with patch("devpost_cli.core.DevpostClient.get_winners", new_callable=AsyncMock) as mock_winners:
             mock_winners.return_value = winners_result
             runner = CliRunner()
-            result = runner.invoke(cli, ["winners", "test-hack"])
+            result = runner.invoke(cli, ["get", "test-hack", "-t", "winners"])
             assert result.exit_code == 0
             assert "No winners" in result.output
+
+    def test_get_command_invalid_type(self):
+        """Test get command with invalid type."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["get", "test-hack", "-t", "invalid"])
+        assert result.exit_code == 2
+        assert "Invalid value" in result.output
 
     def test_evaluate_command_json(self):
         """Test devpost evaluate command with JSON output."""
@@ -450,14 +483,74 @@ class TestCLINewFeatureCommands:
         assert result.exit_code == 0
         assert "evaluate" in result.output.lower() or "Evaluate" in result.output
 
-    def test_list_state_closed(self, mock_devpost_api):
-        """Test that list --state closed is a valid choice."""
+    def test_hackathons_state_closed(self, mock_devpost_api):
+        """Test that hackathons --state closed is a valid choice."""
         runner = CliRunner()
-        result = runner.invoke(cli, ["list", "--state", "closed", "--json"])
+        result = runner.invoke(cli, ["hackathons", "--state", "closed", "--json"])
         assert result.exit_code == 0
 
-    def test_list_state_ended(self, mock_devpost_api):
-        """Test that list --state ended is a valid choice."""
+    def test_hackathons_state_ended(self, mock_devpost_api):
+        """Test that hackathons --state ended is a valid choice."""
         runner = CliRunner()
-        result = runner.invoke(cli, ["list", "--state", "ended", "--json"])
+        result = runner.invoke(cli, ["hackathons", "--state", "ended", "--json"])
+        assert result.exit_code == 0
+
+
+class TestCLINewAPICommands:
+    """Test new API-based CLI commands."""
+
+    def test_featured_command_json(self, mock_devpost_api):
+        """Test featured --json outputs valid JSON."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["featured", "--json"])
+        
+        assert result.exit_code == 0
+        import json
+        data = json.loads(result.output)
+        assert "hackathons" in data
+        assert "count" in data
+
+    def test_featured_command_type_filter(self, mock_devpost_api):
+        """Test featured --type in-person."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["featured", "--type", "in-person"])
+        
+        assert result.exit_code == 0
+
+    def test_recommended_command_json(self, mock_devpost_api):
+        """Test recommended --json outputs valid JSON."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["recommended", "--json"])
+        
+        assert result.exit_code == 0
+        import json
+        data = json.loads(result.output)
+        assert "hackathons" in data
+
+    def test_nearby_command_json(self, mock_devpost_api):
+        """Test nearby --json outputs valid JSON."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["nearby", "--json"])
+        
+        assert result.exit_code == 0
+        import json
+        data = json.loads(result.output)
+        assert "hackathons" in data
+
+    def test_organizations_command_json(self, mock_devpost_api):
+        """Test organizations --json outputs valid JSON."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["organizations", "--json"])
+        
+        assert result.exit_code == 0
+        import json
+        data = json.loads(result.output)
+        assert "organizations" in data
+        assert "count" in data
+
+    def test_organizations_command_query(self, mock_devpost_api):
+        """Test organizations -q filter."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["organizations", "-q", "Google"])
+        
         assert result.exit_code == 0

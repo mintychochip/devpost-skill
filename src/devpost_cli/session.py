@@ -51,12 +51,19 @@ def ensure_session_dir() -> None:
         logger.debug("Could not restrict session directory permissions")
 
 
-def save_session(cookies: list[dict], email: str) -> None:
-    """Save session cookies and email to disk."""
+def save_session(cookies: list[dict], email: str, auth_method: str = "password") -> None:
+    """Save session cookies and email to disk.
+    
+    Args:
+        cookies: List of browser cookies from the authenticated session
+        email: User email (or auth method identifier for OAuth)
+        auth_method: Authentication method used: "password", "github", "google", "facebook", "linkedin"
+    """
     ensure_session_dir()
     session_data = {
         "email": email,
         "cookies": cookies,
+        "auth_method": auth_method,
     }
     with open(SESSION_FILE, "w", encoding="utf-8") as f:
         json.dump(session_data, f, indent=2)
@@ -64,14 +71,34 @@ def save_session(cookies: list[dict], email: str) -> None:
 
 
 def load_session() -> Optional[dict]:
-    """Load session from disk if it exists."""
+    """Load session from disk if it exists.
+    
+    Returns:
+        Dict with keys: email, cookies, auth_method (or None if no session)
+    """
     if not SESSION_FILE.exists():
         return None
     try:
         with open(SESSION_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            session = json.load(f)
+            # Backwards compatibility: default to "password" if auth_method not present
+            if "auth_method" not in session:
+                session["auth_method"] = "password"
+            return session
     except (json.JSONDecodeError, IOError):
         return None
+
+
+def get_auth_method() -> Optional[str]:
+    """Get the authentication method from the current session.
+    
+    Returns:
+        Auth method string ("password", "github", "google", "facebook", "linkedin") or None
+    """
+    session = load_session()
+    if session:
+        return session.get("auth_method", "password")
+    return None
 
 
 def clear_session() -> None:
