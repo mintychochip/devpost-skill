@@ -14,6 +14,7 @@ from .core import (
     DevpostClient,
     DevpostError,
     BASE_URL,
+    API_BASE,
     clear_credentials,
     save_credentials_interactive,
     get_credentials,
@@ -665,6 +666,218 @@ def achievements(username: str, is_json: Optional[bool], verbose: bool):
                 console.print("[dim]No achievements found.[/dim]")
 
     _run_async(_achievements())
+
+
+@cli.command()
+@click.argument("username")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
+def followers(username: str, is_json: Optional[bool]):
+    """Get list of users following this user.
+    
+    Uses browser automation to extract follower cards from the user's followers page.
+    
+    \b
+    Examples:
+      devpost followers tech-dawg015
+      devpost followers mintychochip --json
+    """
+    async def _followers():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            result = await client.get_user_followers(username)
+
+            if output_json(result, is_json):
+                return
+
+            if not result.get("success"):
+                console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/red]")
+                sys.exit(1)
+
+            data = result.get("data", {})
+            followers_list = data.get("followers", [])
+            total_count = data.get("total_count", len(followers_list))
+            
+            console.print(f"[cyan]{username}[/cyan]")
+            console.print(f"followers_page: {BASE_URL}/{username}/followers")
+            console.print(f"total: {total_count}")
+            
+            if followers_list:
+                for f in followers_list[:20]:
+                    name = f.get('name') or f.get('username', 'Unknown')
+                    console.print(f"  {name}")
+                    if f.get('bio'):
+                        console.print(f"    [dim]{f['bio'][:100]}[/dim]")
+                
+                if len(followers_list) > 20:
+                    console.print(f"  [dim]... and {len(followers_list) - 20} more[/dim]")
+            else:
+                console.print("[dim]No followers found.[/dim]")
+
+    _run_async(_followers())
+
+
+@cli.command()
+@click.argument("username")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
+def following(username: str, is_json: Optional[bool]):
+    """Get list of users this user is following.
+    
+    Uses browser automation to extract following cards from the user's following page.
+    
+    \b
+    Examples:
+      devpost following tech-dawg015
+      devpost following mintychochip --json
+    """
+    async def _following():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            result = await client.get_user_following(username)
+
+            if output_json(result, is_json):
+                return
+
+            if not result.get("success"):
+                console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/red]")
+                sys.exit(1)
+
+            data = result.get("data", {})
+            following_list = data.get("following", [])
+            total_count = data.get("total_count", len(following_list))
+            
+            console.print(f"[cyan]{username}[/cyan]")
+            console.print(f"following_page: {BASE_URL}/{username}/following")
+            console.print(f"total: {total_count}")
+            
+            if following_list:
+                for f in following_list[:20]:
+                    name = f.get('name') or f.get('username', 'Unknown')
+                    console.print(f"  {name}")
+                    if f.get('bio'):
+                        console.print(f"    [dim]{f['bio'][:100]}[/dim]")
+                
+                if len(following_list) > 20:
+                    console.print(f"  [dim]... and {len(following_list) - 20} more[/dim]")
+            else:
+                console.print("[dim]Not following anyone.[/dim]")
+
+    _run_async(_following())
+
+
+@cli.command()
+@click.argument("username")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
+def likes(username: str, is_json: Optional[bool]):
+    """Get list of projects this user has liked.
+    
+    Uses browser automation to extract liked projects from the user's likes page.
+    
+    \b
+    Examples:
+      devpost likes tech-dawg015
+      devpost likes mintychochip --json
+    """
+    async def _likes():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            result = await client.get_user_likes(username)
+
+            if output_json(result, is_json):
+                return
+
+            if not result.get("success"):
+                console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/red]")
+                sys.exit(1)
+
+            data = result.get("data", {})
+            likes_list = data.get("likes", [])
+            total_count = data.get("total_count", len(likes_list))
+            
+            console.print(f"[cyan]{username}[/cyan]")
+            console.print(f"likes_page: {BASE_URL}/{username}/likes")
+            console.print(f"total: {total_count}")
+            
+            if likes_list:
+                for p in likes_list[:20]:
+                    title = p.get('title', 'Unknown')
+                    console.print(f"  {title}")
+                    if p.get('tagline'):
+                        console.print(f"    [dim]{p['tagline'][:100]}[/dim]")
+                    if p.get('hackathon'):
+                        console.print(f"    [dim]from {p['hackathon']}[/dim]")
+                
+                if len(likes_list) > 20:
+                    console.print(f"  [dim]... and {len(likes_list) - 20} more[/dim]")
+            else:
+                console.print("[dim]No liked projects yet.[/dim]")
+
+    _run_async(_likes())
+
+
+@cli.command()
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
+def rss(is_json: Optional[bool]):
+    """Get hackathons RSS feed.
+    
+    Fetches the RSS feed from /hackathons.rss with proper headers.
+    Useful for monitoring new hackathons or deadline changes.
+    
+    \b
+    Examples:
+      devpost rss
+      devpost rss --json
+    """
+    async def _rss():
+        import httpx
+        
+        # Note: /api/hackathons.rss returns JSON, not RSS XML
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, */*",
+        }
+        
+        async with httpx.AsyncClient(headers=headers, follow_redirects=True) as client:
+            try:
+                resp = await client.get(f"{API_BASE}/hackathons.rss")
+                resp.raise_for_status()
+                data = resp.json()
+                
+                hackathons = data.get("hackathons", [])
+                
+                result = {
+                    "success": True,
+                    "channel": "Devpost Hackathons",
+                    "items": hackathons,
+                    "count": len(hackathons),
+                }
+                
+                if output_json(result, is_json):
+                    return
+                
+                console.print(f"[cyan]Devpost Hackathons[/cyan]")
+                console.print(f"count: {result['count']}")
+                console.print("")
+                
+                for h in hackathons[:15]:
+                    title = h.get('title', 'Untitled')
+                    url = h.get('url', '')
+                    prize = h.get('prize_amount', '')
+                    ends = h.get('time_left_to_submission', '')
+                    
+                    console.print(f"[bold]{title}[/bold]")
+                    if url:
+                        console.print(f"  {url}")
+                    if prize:
+                        console.print(f"  [green]Prize:[/green] {prize}")
+                    if ends:
+                        console.print(f"  [yellow]Ends:[/yellow] {ends}")
+                    console.print("")
+                
+            except httpx.HTTPStatusError as e:
+                console.print(f"[red]Error fetching feed: {e}[/red]")
+                sys.exit(1)
+            except Exception as e:
+                console.print(f"[red]Error: {e}[/red]")
+                sys.exit(1)
+
+    _run_async(_rss())
 
 
 @cli.command()

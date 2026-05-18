@@ -28,6 +28,9 @@ from .cache import (
     make_resources_key,
     make_updates_key,
     make_discussions_key,
+    make_user_followers_key,
+    make_user_following_key,
+    make_user_likes_key,
     parse_days_left,
     parse_prize_amount,
 )
@@ -1404,6 +1407,375 @@ class DevpostClient:
                 result["data"] = data
                 result["success"] = True
                 result["steps"].append("Successfully extracted achievements")
+
+            except Exception as e:
+                result["error"] = str(e)
+                result["steps"].append(f"Error: {e}")
+            finally:
+                await browser.close()
+
+        if result["success"] and self._cache:
+            self._cache.set(cache_key, result, ttl=3600)
+
+        return result
+
+    async def get_user_followers(self, username: str) -> dict[str, Any]:
+        """Get list of users following this user."""
+        cache_key = make_user_followers_key(username)
+        if self._cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            return {
+                "error": "Playwright not installed. Install with: pip install playwright && playwright install chromium",
+                "code": "DEPENDENCY_MISSING",
+            }
+
+        result = {"success": False, "username": username, "steps": [], "data": {"followers": [], "total_count": 0}}
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=not self.headed)
+            page = await browser.new_page()
+
+            try:
+                followers_url = f"{BASE_URL}/{username}/followers"
+                result["steps"].append(f"Loading {followers_url}")
+                await page.goto(followers_url, timeout=30000)
+                await page.wait_for_load_state("networkidle")
+                await asyncio.sleep(3)
+
+                data = {"followers": [], "total_count": 0}
+
+                if "404" in await page.title():
+                    result["error"] = f"User '{username}' not found"
+                    result["code"] = "NOT_FOUND"
+                    return result
+
+                # Extract count from nav
+                try:
+                    nav_link = await page.query_selector("a[href*='/followers']")
+                    if nav_link:
+                        count_elem = await nav_link.query_selector(".totals span")
+                        if count_elem:
+                            count_text = await count_elem.text_content()
+                            if count_text:
+                                data["total_count"] = int(count_text.strip())
+                except Exception:
+                    logger.debug("Could not extract follower count")
+
+                # Extract follower cards using JavaScript for reliability
+                try:
+                    followers = await page.evaluate('''() => {
+                        const items = document.querySelectorAll('.gallery-item');
+                        const results = [];
+                        items.forEach((item, idx) => {
+                            const link = item.querySelector('a.user-profile-link, a[href*="/users/"], a[href^="https://devpost.com/"]');
+                            
+                            let username = null;
+                            let url = null;
+                            if (link) {
+                                const href = link.getAttribute('href');
+                                url = href;
+                                // Extract username from devpost.com/USERNAME pattern
+                                const match = href.match(/devpost\\.com\\/([^\\/]+)/);
+                                if (match && match[1] !== 'users') {
+                                    username = match[1];
+                                }
+                            }
+                            
+                            // Name is typically in a div after the img
+                            const nameDiv = item.querySelector('.entry-body');
+                            let name = null;
+                            if (nameDiv) {
+                                const texts = nameDiv.textContent.trim().split('\\n').filter(t => t.trim());
+                                if (texts.length > 0) {
+                                    name = texts[0].trim();
+                                    // Filter out button text
+                                    if (name === 'Follow' || name === 'Following') name = null;
+                                }
+                            }
+                            
+                            // Bio is typically the second text block
+                            let bio = null;
+                            if (nameDiv) {
+                                const texts = nameDiv.textContent.trim().split('\\n').filter(t => t.trim());
+                                if (texts.length > 1) {
+                                    bio = texts[1].trim();
+                                    // Filter out button text
+                                    if (bio === 'Follow' || bio === 'Following' || bio.length < 5) bio = null;
+                                }
+                            }
+                            
+                            if (username || (name && name !== 'Follow')) {
+                                results.push({
+                                    username: username,
+                                    name: name,
+                                    url: url ? (url.startsWith('http') ? url : 'https://devpost.com' + url) : null,
+                                    bio: bio
+                                });
+                            }
+                        });
+                        return results;
+                    }''')
+                    
+                    data["followers"] = followers
+                    if not data["total_count"]:
+                        data["total_count"] = len(followers)
+                        
+                except Exception as e:
+                    logger.exception("Could not extract followers: %s", e)
+
+                result["data"] = data
+                result["success"] = True
+                result["steps"].append("Successfully extracted followers")
+
+            except Exception as e:
+                result["error"] = str(e)
+                result["steps"].append(f"Error: {e}")
+            finally:
+                await browser.close()
+
+        if result["success"] and self._cache:
+            self._cache.set(cache_key, result, ttl=3600)
+
+        return result
+
+    async def get_user_following(self, username: str) -> dict[str, Any]:
+        """Get list of users this user is following."""
+        cache_key = make_user_following_key(username)
+        if self._cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            return {
+                "error": "Playwright not installed. Install with: pip install playwright && playwright install chromium",
+                "code": "DEPENDENCY_MISSING",
+            }
+
+        result = {"success": False, "username": username, "steps": [], "data": {"following": [], "total_count": 0}}
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=not self.headed)
+            page = await browser.new_page()
+
+            try:
+                following_url = f"{BASE_URL}/{username}/following"
+                result["steps"].append(f"Loading {following_url}")
+                await page.goto(following_url, timeout=30000)
+                await page.wait_for_load_state("networkidle")
+                await asyncio.sleep(3)
+
+                data = {"following": [], "total_count": 0}
+
+                if "404" in await page.title():
+                    result["error"] = f"User '{username}' not found"
+                    result["code"] = "NOT_FOUND"
+                    return result
+
+                # Extract count from nav
+                try:
+                    nav_link = await page.query_selector("a[href*='/following']")
+                    if nav_link:
+                        count_elem = await nav_link.query_selector(".totals span")
+                        if count_elem:
+                            count_text = await count_elem.text_content()
+                            if count_text:
+                                data["total_count"] = int(count_text.strip())
+                except Exception:
+                    logger.debug("Could not extract following count")
+
+                # Extract following cards using JavaScript (same structure as followers)
+                try:
+                    following = await page.evaluate('''() => {
+                        const items = document.querySelectorAll('.gallery-item');
+                        const results = [];
+                        items.forEach((item, idx) => {
+                            const link = item.querySelector('a.user-profile-link, a[href*="/users/"], a[href^="https://devpost.com/"]');
+                            
+                            let username = null;
+                            let url = null;
+                            if (link) {
+                                const href = link.getAttribute('href');
+                                url = href;
+                                const match = href.match(/devpost\\.com\\/([^\\/]+)/);
+                                if (match && match[1] !== 'users') {
+                                    username = match[1];
+                                }
+                            }
+                            
+                            const nameDiv = item.querySelector('.entry-body');
+                            let name = null;
+                            if (nameDiv) {
+                                const texts = nameDiv.textContent.trim().split('\\n').filter(t => t.trim());
+                                if (texts.length > 0) {
+                                    name = texts[0].trim();
+                                    if (name === 'Follow' || name === 'Following') name = null;
+                                }
+                            }
+                            
+                            let bio = null;
+                            if (nameDiv) {
+                                const texts = nameDiv.textContent.trim().split('\\n').filter(t => t.trim());
+                                if (texts.length > 1) {
+                                    bio = texts[1].trim();
+                                }
+                            }
+                            
+                            if (username || (name && name !== 'Follow')) {
+                                results.push({
+                                    username: username,
+                                    name: name,
+                                    url: url ? (url.startsWith('http') ? url : 'https://devpost.com' + url) : null,
+                                    bio: bio
+                                });
+                            }
+                        });
+                        return results;
+                    }''')
+                    
+                    data["following"] = following
+                    if not data["total_count"]:
+                        data["total_count"] = len(following)
+                        
+                except Exception as e:
+                    logger.exception("Could not extract following: %s", e)
+
+                result["data"] = data
+                result["success"] = True
+                result["steps"].append("Successfully extracted following")
+
+            except Exception as e:
+                result["error"] = str(e)
+                result["steps"].append(f"Error: {e}")
+            finally:
+                await browser.close()
+
+        if result["success"] and self._cache:
+            self._cache.set(cache_key, result, ttl=3600)
+
+        return result
+
+    async def get_user_likes(self, username: str) -> dict[str, Any]:
+        """Get list of projects this user has liked."""
+        cache_key = make_user_likes_key(username)
+        if self._cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            return {
+                "error": "Playwright not installed. Install with: pip install playwright && playwright install chromium",
+                "code": "DEPENDENCY_MISSING",
+            }
+
+        result = {"success": False, "username": username, "steps": [], "data": {"likes": [], "total_count": 0}}
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=not self.headed)
+            page = await browser.new_page()
+
+            try:
+                likes_url = f"{BASE_URL}/{username}/likes"
+                result["steps"].append(f"Loading {likes_url}")
+                await page.goto(likes_url, timeout=30000)
+                await page.wait_for_load_state("networkidle")
+                await asyncio.sleep(3)
+
+                data = {"likes": [], "total_count": 0}
+
+                if "404" in await page.title():
+                    result["error"] = f"User '{username}' not found"
+                    result["code"] = "NOT_FOUND"
+                    return result
+
+                # Extract count from nav
+                try:
+                    nav_link = await page.query_selector("a[href*='/likes']")
+                    if nav_link:
+                        count_elem = await nav_link.query_selector(".totals span")
+                        if count_elem:
+                            count_text = await count_elem.text_content()
+                            if count_text:
+                                data["total_count"] = int(count_text.strip())
+                except Exception:
+                    logger.debug("Could not extract likes count")
+
+                # Extract liked projects using JavaScript
+                try:
+                    likes = await page.evaluate('''() => {
+                        const items = document.querySelectorAll('.gallery-item');
+                        const results = [];
+                        items.forEach(item => {
+                            const link = item.querySelector('a[href*="/software/"]');
+                            
+                            let url = null;
+                            let title = null;
+                            let tagline = null;
+                            let hackathon = null;
+                            
+                            if (link) {
+                                const href = link.getAttribute('href');
+                                url = href.startsWith('http') ? href : 'https://devpost.com' + href;
+                                
+                                // Title is often in the link text or in h5
+                                const titleElem = item.querySelector('h5, .title');
+                                if (titleElem) {
+                                    title = titleElem.textContent.trim();
+                                } else {
+                                    // Try to extract from link text
+                                    const linkText = link.textContent.trim().split('\\n')[0].trim();
+                                    if (linkText && linkText.length < 80) {
+                                        title = linkText;
+                                    }
+                                }
+                                
+                                // Tagline is typically in .tagline or second text block
+                                const taglineElem = item.querySelector('.tagline');
+                                if (taglineElem) {
+                                    const taglineText = taglineElem.textContent.trim();
+                                    tagline = taglineText.substring(0, 200);
+                                }
+                                
+                                // Hackathon info
+                                const hackathonElem = item.querySelector('.hackathon, .challenge-name');
+                                if (hackathonElem) {
+                                    hackathon = hackathonElem.textContent.trim();
+                                }
+                            }
+                            
+                            if (title || url) {
+                                results.push({
+                                    title: title,
+                                    url: url,
+                                    tagline: tagline,
+                                    hackathon: hackathon
+                                });
+                            }
+                        });
+                        return results;
+                    }''')
+                    
+                    data["likes"] = likes
+                    if not data["total_count"]:
+                        data["total_count"] = len(likes)
+                        
+                except Exception as e:
+                    logger.exception("Could not extract likes: %s", e)
+
+                result["data"] = data
+                result["success"] = True
+                result["steps"].append("Successfully extracted likes")
 
             except Exception as e:
                 result["error"] = str(e)

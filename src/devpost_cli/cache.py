@@ -342,6 +342,22 @@ def make_discussions_key(slug: str, limit: int = 20) -> str:
     return f"discussions_{slug}_{limit}"
 
 
+def make_user_followers_key(username: str) -> str:
+    return f"user_followers_{username}"
+
+
+def make_user_following_key(username: str) -> str:
+    return f"user_following_{username}"
+
+
+def make_user_likes_key(username: str) -> str:
+    return f"user_likes_{username}"
+
+
+def make_rss_key() -> str:
+    return "hackathons_rss"
+
+
 def parse_days_left(text: Optional[str]) -> Optional[float]:
     if not text:
         return None
