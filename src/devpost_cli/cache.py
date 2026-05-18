@@ -241,11 +241,41 @@ def _matches(obj: Any, query: str) -> bool:
 
 def make_list_key(
     state: Optional[str] = None,
-    sort_by: str = "recently-added",
-    query: Optional[str] = None,
-    limit: int = 20,
+    order_by: str = "recently-added",
+    search: Optional[str] = None,
+    challenge_type: Optional[list[str]] = None,
+    length: Optional[list[str]] = None,
+    themes: Optional[list[str]] = None,
+    organization: Optional[str] = None,
+    open_to: Optional[list[str]] = None,
+    managed_by_devpost_badge: bool = False,
+    eligibility: bool = False,
+    page: int = 1,
+    per_page: int = 9,
+    limit: Optional[int] = None,  # for backward compat with old calls
 ) -> str:
-    parts = ["hackathons", state or "all", sort_by, query or "noquery", str(limit)]
+    parts = ["hackathons"]
+    parts.append(state or "all")
+    parts.append(order_by)
+    parts.append(search or "noquery")
+    if challenge_type:
+        parts.append("ct:" + "-".join(sorted(challenge_type)))
+    if length:
+        parts.append("len:" + "-".join(sorted(length)))
+    if themes:
+        parts.append("themes:" + "-".join(sorted(themes)))
+    if organization:
+        parts.append("org:" + organization.replace(" ", ""))
+    if open_to:
+        parts.append("access:" + "-".join(sorted(open_to)))
+    if managed_by_devpost_badge:
+        parts.append("devpost-managed")
+    if eligibility:
+        parts.append("eligible")
+    parts.append(f"p{page}")
+    parts.append(f"pp{per_page}")
+    if limit:
+        parts.append(f"l{limit}")
     return "_".join(parts)
 
 
@@ -276,8 +306,11 @@ def make_evaluate_key(slug: str) -> str:
     return f"evaluate_{slug}"
 
 
-def make_search_projects_key(query: str, limit: int = 20) -> str:
-    return f"search_projects_{query}_{limit}"
+def make_search_projects_key(query: str, limit: int = 20, order_by: Optional[str] = None) -> str:
+    parts = ["search_projects", query.replace(" ", "_"), f"l{limit}"]
+    if order_by:
+        parts.append(order_by)
+    return "_".join(parts)
 
 
 def make_popular_projects_key(limit: int = 20) -> str:

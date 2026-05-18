@@ -59,7 +59,7 @@ def _run_async(coro):
 
 
 @click.group()
-@click.version_option(version="0.3.0", prog_name="devpost")
+@click.version_option(version="0.4.0", prog_name="devpost")
 @click.option("--headed", is_flag=True, help="Run browser in headed mode (visible window) for debugging")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
 def cli(headed: bool, verbose: bool):
@@ -87,11 +87,33 @@ def cli(headed: bool, verbose: bool):
 @click.option("--limit", "-l", default=20, help="Number of hackathons to show (default: 20)")
 @click.option("--state", "-s", type=click.Choice(["open", "closed", "ended", "upcoming", "judging", "submitting"]),
               help="Filter by hackathon state ('closed' is an alias for 'ended')")
-@click.option("--sort", type=click.Choice(["recently-added", "submission-deadline", "prize-amount", "popularity"]),
-              default="recently-added", help="Sort order (default: recently-added)")
+@click.option("--sort", type=click.Choice(["most-relevant", "deadline", "recently-added", "prize-amount"]),
+              default="most-relevant", help="Sort order (default: most-relevant)")
 @click.option("--query", "-q", help="Search query string")
+@click.option("--location", type=click.Choice(["online", "in-person"]), multiple=True, help="Location type (repeatable)")
+@click.option("--duration", type=click.Choice(["days", "weeks", "months"]), multiple=True, help="Duration (repeatable)")
+@click.option("--theme", multiple=True, help="Theme filter (repeatable, e.g. 'Machine Learning/AI')")
+@click.option("--organization", help="Organization name")
+@click.option("--access", type=click.Choice(["public", "invite-only"]), multiple=True, help="Access type (repeatable)")
+@click.option("--devpost-managed", is_flag=True, help="Only Devpost-managed hackathons")
+@click.option("--page", type=int, default=1, help="Page number")
+@click.option("--per-page", type=int, default=9, help="Results per page")
 @click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
-def hackathons(limit: int, state: Optional[str], sort: str, query: Optional[str], is_json: Optional[bool]):
+def hackathons(
+    limit: int,
+    state: Optional[str],
+    sort: str,
+    query: Optional[str],
+    location: tuple[str],
+    duration: tuple[str],
+    theme: tuple[str],
+    organization: Optional[str],
+    access: tuple[str],
+    devpost_managed: bool,
+    page: int,
+    per_page: int,
+    is_json: Optional[bool],
+):
     """List hackathons on Devpost.
     
     \b
@@ -105,29 +127,41 @@ def hackathons(limit: int, state: Optional[str], sort: str, query: Optional[str]
     
     Hidden alias: devpost list (deprecated)
     """
-    async def _list():
+    async def _hackathons():
         async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
-            hackathons = await client.list_hackathons(
+            result = await client.list_hackathons(
                 limit=limit,
                 open_state=state,
-                sort_by=sort,
-                query=query,
+                order_by=sort,
+                search=query,
+                challenge_type=list(location) if location else None,
+                length=list(duration) if duration else None,
+                themes=list(theme) if theme else None,
+                organization=organization,
+                open_to=list(access) if access else None,
+                managed_by_devpost_badge=devpost_managed,
+                page=page,
+                per_page=per_page,
             )
 
-            if output_json(hackathons, is_json):
+            hackathons_list = result.get("hackathons", [])
+            meta = result.get("meta", {})
+
+            if output_json(result, is_json):
                 return
 
-            if not hackathons:
+            if not hackathons_list:
                 console.print("[yellow]No hackathons found.[/yellow]")
                 return
 
-            table = Table(title="Hackathons on Devpost")
+            total = meta.get("total_count", len(hackathons_list))
+            table = Table(title=f"Hackathons on Devpost ({len(hackathons_list)} of {total})")
             table.add_column("Title", style="cyan", no_wrap=True)
             table.add_column("Status", style="green")
             table.add_column("Prize", style="yellow")
             table.add_column("Ends", style="magenta")
 
-            for h in hackathons:
+            for h in hackathons_list:
                 status = h.get("open_state", "unknown")
                 prize = h.get("prize_amount", "N/A")
                 ends = h.get("ends_at", "N/A")
@@ -141,7 +175,7 @@ def hackathons(limit: int, state: Optional[str], sort: str, query: Optional[str]
 
             console.print(table)
 
-    _run_async(_list())
+    _run_async(_hackathons())
 
 
 @cli.command(name="list", hidden=True)
@@ -160,12 +194,14 @@ def list_cmd(limit: int, state: Optional[str], sort: str, query: Optional[str], 
 async def _list_cmd(limit: int, state: Optional[str], sort: str, query: Optional[str], is_json: Optional[bool]):
     """Internal list command logic (legacy alias)."""
     async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
-        hackathons_list = await client.list_hackathons(
+        result = await client.list_hackathons(
             limit=limit,
             open_state=state,
-            sort_by=sort,
-            query=query,
+            order_by=sort,
+            search=query,
         )
+
+        hackathons_list = result.get("hackathons", [])
 
         if output_json(hackathons_list, is_json):
             return
@@ -323,9 +359,22 @@ def scrape(url: str, is_json: bool, output: Optional[str]):
 @cli.command(name="gallery")
 @click.argument("slug")
 @click.option("--limit", "-l", default=20, help="Number of projects to show (default: 20)")
-@click.option("--winners", "-w", is_flag=True, help="Only show winning projects")
+@click.option("--sort", type=click.Choice(["recent", "liked", "winners"]), default="recent", help="Sort order")
+@click.option("--category", help="Filter by category (hackathon-specific)")
+@click.option("--query", "-q", help="Search within gallery")
+@click.option("--page", type=int, default=1, help="Page number")
+@click.option("--winners", "-w", is_flag=True, help="Only show winning projects (alias for --sort winners)")
 @click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
-def gallery(slug: str, limit: int, winners: bool, is_json: Optional[bool]):
+def gallery(
+    slug: str,
+    limit: int,
+    sort: str,
+    category: Optional[str],
+    query: Optional[str],
+    page: int,
+    winners: bool,
+    is_json: Optional[bool],
+):
     """List projects from a hackathon's project gallery.
     
     Works for active AND closed/past hackathons. Scrapes the gallery page
@@ -341,11 +390,16 @@ def gallery(slug: str, limit: int, winners: bool, is_json: Optional[bool]):
     """
     async def _gallery():
         hackathon_url = f"https://{slug}.devpost.com/"
+        actual_winners = winners or (sort == "winners")
         async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
             result = await client.list_hackathon_projects(
                 hackathon_url=hackathon_url,
                 limit=limit,
-                winners_only=winners,
+                winners_only=actual_winners,
+                sort_by=sort if sort != "recent" else None,
+                category=category,
+                search_query=query,
+                page=page,
             )
 
             if output_json(result, is_json):
@@ -693,6 +747,13 @@ def evaluate(slug: str, skills: Optional[str], is_json: Optional[bool], no_cache
 @click.argument("query")
 @click.option("--in", "hackathon", help="Search within a specific hackathon (slug)")
 @click.option("--limit", "-l", default=20, help="Number of results (default: 20)")
+@click.option("--sort", type=click.Choice(["newest", "popular", "trending"]), default="newest", help="Sort order")
+@click.option("--winner", is_flag=True, help="Winners only (is:winner)")
+@click.option("--featured", is_flag=True, help="Staff picks only (is:featured)")
+@click.option("--has-video", is_flag=True, help="Projects with video (has:video)")
+@click.option("--has-image", is_flag=True, help="Projects with images (has:image)")
+@click.option("--by-user", help="By username (@username)")
+@click.option("--at", "at_hackathon", help="From hackathon (at:\"hackathon\")")
 @click.option("--winners", is_flag=True, help="In-hackathon: search only winning projects")
 @click.option("--tech", is_flag=True, help="In-hackathon: search only tech stacks")
 @click.option("--include-rules", is_flag=True, help="In-hackathon: also search hackathon description and rules")
@@ -702,6 +763,13 @@ def search(
     query: str,
     hackathon: Optional[str],
     limit: int,
+    sort: str,
+    winner: bool,
+    featured: bool,
+    has_video: bool,
+    has_image: bool,
+    by_user: Optional[str],
+    at_hackathon: Optional[str],
     winners: bool,
     tech: bool,
     include_rules: bool,
@@ -716,13 +784,19 @@ def search(
     Global project search:
       devpost search "AI"                          # Search projects
       devpost search "chatbot" -l 30               # More results
+      devpost search "AI" --sort popular           # Sort by popularity
+      devpost search "AI" --winner --has-video     # Winners with video
+    
+    \b
+    Advanced operators (can also type directly in query):
+      is:winner, is:featured, has:video, has:image
+      @username, at:"hackathon name", #python
     
     \b
     In-hackathon search:
       devpost search "RAG" --in medo               # Search projects in MeDo
       devpost search "agent" --in medo --winners   # Only winners
       devpost search "OpenAI" --in medo --tech     # Search tech stacks
-      devpost search "requirement" --in medo --include-rules
     
     For hackathon search, use: devpost hackathons --query "AI"
     """
@@ -734,18 +808,47 @@ def search(
             use_cache, is_json,
         )
     else:
-        _search_projects_global(query, limit, use_cache, is_json)
+        _search_projects_global(
+            query, limit, sort, winner, featured, has_video, has_image,
+            by_user, at_hackathon, use_cache, is_json,
+        )
 
 
 def _search_projects_global(
     query: str,
     limit: int,
+    sort: str,
+    winner: bool,
+    featured: bool,
+    has_video: bool,
+    has_image: bool,
+    by_user: Optional[str],
+    at_hackathon: Optional[str],
     use_cache: bool,
     is_json: Optional[bool],
 ):
     async def _run():
+        full_query = query
+
+        operators = []
+        if winner:
+            operators.append("is:winner")
+        if featured:
+            operators.append("is:featured")
+        if has_video:
+            operators.append("has:video")
+        if has_image:
+            operators.append("has:image")
+        if by_user:
+            operators.append(f"@{by_user}")
+        if at_hackathon:
+            operators.append(f'at:"{at_hackathon}"')
+
+        if operators:
+            full_query = f"{query} {' '.join(operators)}"
+
         async with DevpostClient(headed=_cli_config.get("headed", False), use_cache=use_cache) as client:
-            projects = await client.search_projects(query=query, limit=limit)
+            projects = await client.search_projects(query=full_query, limit=limit, order_by=sort if sort != "newest" else None)
 
             if output_json(projects, is_json):
                 return
@@ -1016,6 +1119,212 @@ def discussions(slug: str, limit: int, is_json: Optional[bool]):
 
 
 @cli.group()
+def details():
+    """View hackathon details sub-pages.
+    
+    \b
+    Examples:
+      devpost details medo               # All sections
+      devpost details medo dates         # Schedule/dates
+      devpost details medo eligibility   # Eligibility rules
+      devpost details medo requirements  # Submission requirements
+      devpost details medo judging       # Judging criteria
+      devpost details medo prizes        # Prize breakdown
+    """
+    pass
+
+
+@details.command()
+@click.argument("slug")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def dates(slug: str, is_json: Optional[bool]):
+    """View hackathon schedule and key dates."""
+    async def _dates():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            hackathon = await client.get_hackathon_by_slug(slug)
+            if not hackathon:
+                console.print(f"[red]Hackathon '{slug}' not found.[/red]")
+                sys.exit(3)
+            
+            dates_info = hackathon.get("submission_period_dates", "No dates available")
+            time_left = hackathon.get("time_left_to_submission", "")
+            
+            result = {
+                "slug": slug,
+                "title": hackathon.get("title"),
+                "dates": dates_info,
+                "time_left": time_left,
+            }
+            
+            if output_json(result, is_json):
+                return
+            
+            console.print(Panel(
+                f"[bold cyan]{hackathon.get('title', slug)}[/bold cyan]\n\n"
+                f"[green]Dates:[/green] {dates_info}\n"
+                f"[green]Time left:[/green] {time_left or 'N/A'}",
+                title="Schedule",
+                border_style="blue",
+            ))
+    
+    _run_async(_dates())
+
+
+@details.command()
+@click.argument("slug")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def eligibility(slug: str, is_json: Optional[bool]):
+    """View hackathon eligibility rules."""
+    async def _eligibility():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            rules = await client.parse_rules_page(slug)
+            
+            if output_json(rules, is_json):
+                return
+            
+            eligibility = rules.get("eligibility", [])
+            if not eligibility:
+                console.print("[yellow]No eligibility rules found.[/yellow]")
+                return
+            
+            console.print(Panel(
+                f"[bold cyan]{slug}[/bold cyan] — Eligibility\n\n"
+                + "\n".join([f"• {item[:200]}" for item in eligibility[:10]]),
+                title="Eligibility Rules",
+                border_style="blue",
+            ))
+    
+    _run_async(_eligibility())
+
+
+@details.command()
+@click.argument("slug")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def requirements(slug: str, is_json: Optional[bool]):
+    """View submission requirements."""
+    async def _requirements():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            rules = await client.parse_rules_page(slug)
+            
+            if output_json(rules, is_json):
+                return
+            
+            requirements = rules.get("requirements", [])
+            if not requirements:
+                console.print("[yellow]No requirements found.[/yellow]")
+                return
+            
+            console.print(Panel(
+                f"[bold cyan]{slug}[/bold cyan] — Requirements\n\n"
+                + "\n".join([f"• {item[:200]}" for item in requirements[:10]]),
+                title="Submission Requirements",
+                border_style="blue",
+            ))
+    
+    _run_async(_requirements())
+
+
+@details.command()
+@click.argument("slug")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def judging(slug: str, is_json: Optional[bool]):
+    """View judging criteria."""
+    async def _judging():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            rules = await client.parse_rules_page(slug)
+            
+            if output_json(rules, is_json):
+                return
+            
+            judging = rules.get("judging_criteria", [])
+            if not judging:
+                console.print("[yellow]No judging criteria found.[/yellow]")
+                return
+            
+            console.print(Panel(
+                f"[bold cyan]{slug}[/bold cyan] — Judging Criteria\n\n"
+                + "\n".join([f"• {item[:200]}" for item in judging[:10]]),
+                title="Judging Criteria",
+                border_style="blue",
+            ))
+    
+    _run_async(_judging())
+
+
+@details.command()
+@click.argument("slug")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def prizes(slug: str, is_json: Optional[bool]):
+    """View prize breakdown."""
+    async def _prizes():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            rules = await client.parse_rules_page(slug)
+            
+            if output_json(rules, is_json):
+                return
+            
+            prizes = rules.get("prize_categories", [])
+            if not prizes:
+                hackathon = await client.get_hackathon_by_slug(slug)
+                prize_amount = hackathon.get("prize_amount", "N/A") if hackathon else "N/A"
+                console.print(f"[yellow]No detailed prize breakdown found. Total: {prize_amount}[/yellow]")
+                return
+            
+            console.print(Panel(
+                f"[bold cyan]{slug}[/bold cyan] — Prizes\n\n"
+                + "\n".join([f"• {item[:200]}" for item in prizes[:15]]),
+                title="Prize Breakdown",
+                border_style="yellow",
+            ))
+    
+    _run_async(_prizes())
+
+
+@cli.command()
+@click.option("--popular", is_flag=True, help="Show popular themes with active counts")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def themes(popular: bool, is_json: Optional[bool]):
+    """List all Devpost hackathon themes.
+    
+    \b
+    Examples:
+      devpost themes                         # All 29 themes
+      devpost themes --popular               # Popular themes with counts
+      devpost themes --json                  # JSON output
+    """
+    async def _themes():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            themes_list = await client.get_themes(popular=popular)
+            
+            if output_json(themes_list, is_json):
+                return
+            
+            if not themes_list:
+                console.print("[yellow]No themes found.[/yellow]")
+                return
+            
+            if popular:
+                table = Table(title="Popular Themes")
+                table.add_column("Theme", style="cyan")
+                table.add_column("Active Hackathons", style="green")
+                table.add_column("Total Prize", style="yellow")
+                
+                for t in themes_list:
+                    table.add_row(
+                        t.get("name", "Unknown"),
+                        str(t.get("active_count", 0)),
+                        t.get("total_prize", "N/A"),
+                    )
+                console.print(table)
+            else:
+                console.print("[bold]All Devpost Themes:[/bold]\n")
+                for i, t in enumerate(themes_list, 1):
+                    console.print(f"  {i:2}. {t.get('name', 'Unknown')}")
+    
+    _run_async(_themes())
+
+
+@cli.group()
 def projects():
     """Browse projects on Devpost.
     
@@ -1032,12 +1341,21 @@ def projects():
 @projects.command()
 @click.argument("query")
 @click.option("--limit", "-l", default=20, help="Number of results (default: 20)")
+@click.option("--sort", type=click.Choice(["newest", "popular", "trending"]), default="newest", help="Sort order")
+@click.option("--winner", is_flag=True, help="Winners only (is:winner)")
+@click.option("--featured", is_flag=True, help="Staff picks only (is:featured)")
 @click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
-def search(query: str, limit: int, is_json: Optional[bool]):
+def search(query: str, limit: int, sort: str, winner: bool, featured: bool, is_json: Optional[bool]):
     """Search projects by keyword."""
     async def _run():
+        full_query = query
+        if winner:
+            full_query += " is:winner"
+        if featured:
+            full_query += " is:featured"
+
         async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
-            projects = await client.search_projects(query=query, limit=limit)
+            projects = await client.search_projects(query=full_query, limit=limit, order_by=sort if sort != "newest" else None)
 
             if output_json(projects, is_json):
                 return
@@ -1094,8 +1412,9 @@ def popular(limit: int, is_json: Optional[bool]):
 @projects.command(name="built-with")
 @click.argument("tech")
 @click.option("--limit", "-l", default=20, help="Number of results (default: 20)")
+@click.option("--sort", type=click.Choice(["newest", "popular", "trending"]), default="newest", help="Sort order")
 @click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
-def built_with(tech: str, limit: int, is_json: Optional[bool]):
+def built_with(tech: str, limit: int, sort: str, is_json: Optional[bool]):
     """List projects built with a specific technology.
     
     \b
@@ -1103,10 +1422,11 @@ def built_with(tech: str, limit: int, is_json: Optional[bool]):
       devpost projects built-with Python
       devpost projects built-with "React"
       devpost projects built-with "OpenAI"
+      devpost projects built-with Python --sort trending
     """
     async def _run():
         async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
-            projects = await client.get_built_with_projects(tech=tech, limit=limit)
+            projects = await client.get_built_with_projects(tech=tech, limit=limit, order_by=sort if sort != "newest" else None)
 
             if output_json(projects, is_json):
                 return

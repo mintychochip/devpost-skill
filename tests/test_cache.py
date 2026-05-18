@@ -188,7 +188,7 @@ class TestMatches:
 
 class TestKeyGenerators:
     def test_make_list_key(self):
-        key = make_list_key(state="open", sort_by="prize-amount", query="AI", limit=10)
+        key = make_list_key(state="open", order_by="prize-amount", search="AI", limit=10)
         assert "open" in key
         assert "prize-amount" in key
         assert "AI" in key

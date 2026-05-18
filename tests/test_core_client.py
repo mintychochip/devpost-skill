@@ -12,39 +12,41 @@ class TestDevpostClient:
     """Test the unauthenticated HTTP client."""
 
     @pytest.mark.asyncio
-    async def test_list_hackathons_returns_list(self, mock_devpost_api):
-        """Test that list_hackathons returns a list."""
+    async def test_list_hackathons_returns_dict(self, mock_devpost_api):
+        """Test that list_hackathons returns a dict with hackathons list."""
         async with DevpostClient() as client:
             result = await client.list_hackathons(limit=5)
-            assert isinstance(result, list)
-            assert len(result) == 2
+            assert isinstance(result, dict)
+            assert "hackathons" in result
+            assert isinstance(result["hackathons"], list)
 
     @pytest.mark.asyncio
-    async def test_list_hackathons_with_open_state(self, mock_devpost_api):
-        """Test filtering by open_state."""
+    async def test_list_hackathons_with_status(self, mock_devpost_api):
+        """Test filtering by status[]."""
         async with DevpostClient(use_cache=False) as client:
             await client.list_hackathons(open_state="open", limit=5)
             
             request = mock_devpost_api["hackathons"].calls.last.request
-            assert request.url.params["open_state"] == "open"
+            assert "status[]" in request.url.params
+            assert request.url.params["status[]"] == "open"
 
     @pytest.mark.asyncio
-    async def test_list_hackathons_with_sort_by(self, mock_devpost_api):
+    async def test_list_hackathons_with_order_by(self, mock_devpost_api):
         """Test sorting by different criteria."""
         async with DevpostClient(use_cache=False) as client:
-            await client.list_hackathons(sort_by="prize-amount", limit=5)
+            await client.list_hackathons(order_by="prize-amount", limit=5)
             
             request = mock_devpost_api["hackathons"].calls.last.request
-            assert request.url.params["sort_by"] == "prize-amount"
+            assert request.url.params["order_by"] == "prize-amount"
 
     @pytest.mark.asyncio
-    async def test_list_hackathons_with_query(self, mock_devpost_api):
-        """Test searching with query parameter."""
+    async def test_list_hackathons_with_search(self, mock_devpost_api):
+        """Test searching with search parameter."""
         async with DevpostClient(use_cache=False) as client:
-            await client.list_hackathons(query="AI", limit=5)
+            await client.list_hackathons(search="AI", limit=5)
             
             request = mock_devpost_api["hackathons"].calls.last.request
-            assert request.url.params["q"] == "AI"
+            assert request.url.params["search"] == "AI"
 
     @pytest.mark.asyncio
     async def test_get_hackathon_by_slug_found(self, mock_devpost_api):
@@ -301,8 +303,9 @@ class TestDevpostClient:
             respx.get("https://devpost.com/api/hackathons").mock(side_effect=side_effect)
             async with DevpostClient(use_cache=False) as client:
                 result = await client.list_hackathons(limit=5, open_state="closed")
-                assert len(result) >= 1
-                assert result[0]["open_state"] == "ended"
+                hackathons_list = result.get("hackathons", [])
+                assert len(hackathons_list) >= 1
+                assert hackathons_list[0]["open_state"] == "ended"
 
     @pytest.mark.asyncio
     async def test_evaluate_hackathon_success(self):

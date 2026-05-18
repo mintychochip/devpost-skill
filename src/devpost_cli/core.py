@@ -340,33 +340,106 @@ class DevpostClient:
         self,
         limit: int = 20,
         open_state: Optional[str] = None,
-        sort_by: str = "recently-added",
-        query: Optional[str] = None,
-    ) -> list[dict]:
-        """List hackathons via API.
+        order_by: str = "recently-added",
+        search: Optional[str] = None,
+        challenge_type: Optional[list[str]] = None,
+        length: Optional[list[str]] = None,
+        themes: Optional[list[str]] = None,
+        organization: Optional[str] = None,
+        open_to: Optional[list[str]] = None,
+        managed_by_devpost_badge: bool = False,
+        eligibility: bool = False,
+        page: int = 1,
+        per_page: int = 9,
+    ) -> dict[str, Any]:
+        """List hackathons via API with full filter support.
 
-        Note: The API open_state filter is broken for non-open states.
-        When requesting 'ended' (closed) hackathons, we page through
-        results and filter client-side.
+        Returns a dict with 'hackathons' list and 'meta' info from API.
+
+        API parameters match the website:
+        - status[]: open, upcoming, ended (not open_state)
+        - order_by: most-relevant, deadline, recently-added, prize-amount (not sort_by)
+        - search: text search (not q)
+        - challenge_type[]: online, in-person
+        - length[]: days, weeks, months
+        - themes[]: theme names (URL-encoded)
+        - organization: org name
+        - open_to[]: public, invite_only
+        - managed_by_devpost_badge: 1 or 0
+        - eligibility: 1 or 0 (requires auth)
+        - page, per_page: pagination
         """
-        api_state = open_state
-        if api_state == "closed":
-            api_state = "ended"
+        api_states = [open_state] if open_state else []
+        if "closed" in api_states:
+            api_states = [s if s != "closed" else "ended" for s in api_states]
 
-        if api_state in ("ended", "closed"):
-            return await self._list_ended_hackathons(limit=limit, query=query)
+        if api_states == ["ended"] or api_states == ["closed"]:
+            ended_data = await self._list_ended_hackathons(
+                limit=limit,
+                query=search,
+                order_by=order_by,
+            )
+            return {
+                "hackathons": ended_data,
+                "meta": {"total_count": len(ended_data), "per_page": limit, "fuzzy": False},
+            }
 
-        cache_key = make_list_key(state=open_state, sort_by=sort_by, query=query, limit=limit)
+        cache_key = make_list_key(
+            state=open_state,
+            order_by=order_by,
+            search=search,
+            challenge_type=challenge_type,
+            length=length,
+            themes=themes,
+            organization=organization,
+            open_to=open_to,
+            managed_by_devpost_badge=managed_by_devpost_badge,
+            eligibility=eligibility,
+            page=page,
+            per_page=per_page,
+        )
         if self._cache:
             cached = self._cache.get(cache_key)
             if cached is not None:
                 return cached
 
-        params: dict = {"limit": limit, "sort_by": sort_by}
-        if open_state:
-            params["open_state"] = open_state
-        if query:
-            params["q"] = query
+        params: dict = {"page": page, "per_page": per_page}
+
+        if api_states and api_states != [None]:
+            for state in api_states:
+                if state:
+                    params.setdefault("status[]", []).append(state)
+
+        if order_by and order_by != "most-relevant":
+            params["order_by"] = order_by
+
+        if search:
+            params["search"] = search
+
+        if challenge_type:
+            for ct in challenge_type:
+                params.setdefault("challenge_type[]", []).append(ct)
+
+        if length:
+            for l in length:
+                params.setdefault("length[]", []).append(l)
+
+        if themes:
+            for theme in themes:
+                params.setdefault("themes[]", []).append(theme)
+
+        if organization:
+            params["organization"] = organization
+
+        if open_to:
+            for ot in open_to:
+                params.setdefault("open_to[]", []).append(ot)
+
+        if managed_by_devpost_badge:
+            params["managed_by_devpost_badge"] = "1"
+
+        if eligibility:
+            params["eligibility"] = "1"
 
         resp = await self._request_with_retry(
             "GET",
@@ -374,6 +447,21 @@ class DevpostClient:
             params=params,
             headers={"Accept": "application/json"},
         )
+        data = resp.json()
+        hackathons = data.get("hackathons", [])
+        meta = data.get("meta", {})
+
+        for h in hackathons:
+            if h.get("prize_amount"):
+                h["prize_amount"] = clean_html(h["prize_amount"])
+            h["ends_at"] = h.get("time_left_to_submission") or h.get("submission_period_dates")
+
+        result = {"hackathons": hackathons, "meta": meta}
+
+        if self._cache:
+            self._cache.set(cache_key, result)
+
+        return result
         data = resp.json()
         hackathons = data.get("hackathons", [])
 
@@ -391,14 +479,15 @@ class DevpostClient:
         self,
         limit: int = 20,
         query: Optional[str] = None,
+        order_by: str = "recently-added",
     ) -> list[dict]:
         """List ended (closed) hackathons by paging through the API.
 
-        The Devpost API does not support filtering by open_state=ended,
+        The Devpost API does not support filtering by status[]=ended,
         so we page through results starting from later pages where
         ended hackathons typically appear.
         """
-        cache_key = make_list_key(state="ended", sort_by="recently-added", query=query, limit=limit)
+        cache_key = make_list_key(state="ended", order_by=order_by, search=query, limit=limit)
         if self._cache:
             cached = self._cache.get(cache_key)
             if cached is not None:
@@ -410,10 +499,13 @@ class DevpostClient:
             if len(ended) >= limit:
                 break
             try:
+                api_params = {"page": start_page, "per_page": 9, "order_by": order_by}
+                if query:
+                    api_params["search"] = query
                 resp = await self._request_with_retry(
                     "GET",
                     f"{API_BASE}/hackathons",
-                    params={"page": start_page, "limit": 9, "sort_by": "recently-added"},
+                    params=api_params,
                     headers={"Accept": "application/json"},
                 )
                 data = resp.json()
@@ -439,10 +531,13 @@ class DevpostClient:
         max_scan = 60
         while len(ended) < limit and page <= max_scan:
             try:
+                api_params = {"page": page, "per_page": 9, "order_by": order_by}
+                if query:
+                    api_params["search"] = query
                 resp = await self._request_with_retry(
                     "GET",
                     f"{API_BASE}/hackathons",
-                    params={"page": page, "limit": 9, "sort_by": "recently-added"},
+                    params=api_params,
                     headers={"Accept": "application/json"},
                 )
                 data = resp.json()
@@ -657,6 +752,10 @@ class DevpostClient:
         limit: int = 50,
         winners_only: bool = False,
         fetch_all_pages: bool = True,
+        sort_by: Optional[str] = None,
+        category: Optional[str] = None,
+        search_query: Optional[str] = None,
+        page: int = 1,
     ) -> dict[str, Any]:
         """List all projects from a hackathon's project gallery."""
         validate_devpost_url(hackathon_url)
@@ -676,17 +775,38 @@ class DevpostClient:
         }
 
         base_gallery_url = f"{hackathon_url.rstrip('/')}/project-gallery"
-        result["steps"].append(f"Fetching gallery: {base_gallery_url}")
+        
+        params = {}
+        if sort_by and sort_by != "recent":
+            if sort_by == "liked":
+                params["sort_by"] = "liking_count"
+            elif sort_by == "winners":
+                params["winners_only"] = "true"
+        if category:
+            params["filter[category]"] = category
+        if search_query:
+            params["query"] = search_query
+        if page > 1:
+            params["page"] = str(page)
+
+        gallery_url = base_gallery_url
+        if params:
+            from urllib.parse import urlencode
+            gallery_url = f"{base_gallery_url}?{urlencode(params)}"
+        
+        result["steps"].append(f"Fetching gallery: {gallery_url}")
 
         try:
             all_projects = []
             seen_urls = set()
-            page = 1
+            current_page = 1
             max_pages = 10 if fetch_all_pages else 1
 
-            while page <= max_pages:
-                gallery_url = f"{base_gallery_url}?page={page}" if page > 1 else base_gallery_url
-                result["steps"].append(f"Fetching page {page}: {gallery_url}")
+            while current_page <= max_pages:
+                if current_page > 1:
+                    params["page"] = str(current_page)
+                    gallery_url = f"{base_gallery_url}?{urlencode(params)}"
+                result["steps"].append(f"Fetching page {current_page}: {gallery_url}")
 
                 try:
                     resp = await self._request_with_retry("GET", gallery_url)
@@ -758,10 +878,10 @@ class DevpostClient:
                         break
 
                     next_link = soup.find("a", href=re.compile(r'page=\d+'))
-                    if not next_link or f"page={page+1}" not in str(next_link):
+                    if not next_link or f"page={current_page+1}" not in str(next_link):
                         pagination = soup.find(class_=re.compile(r'pagination', re.I))
                         if pagination:
-                            next_page_link = pagination.find("a", href=re.compile(rf'page={page+1}'))
+                            next_page_link = pagination.find("a", href=re.compile(rf'page={current_page+1}'))
                             if not next_page_link:
                                 result["steps"].append("No more pages found")
                                 break
@@ -769,7 +889,7 @@ class DevpostClient:
                             result["steps"].append("No pagination found, assuming last page")
                             break
 
-                    page += 1
+                    current_page += 1
 
                 except DevpostError as e:
                     if e.status_code == 404:
@@ -1402,9 +1522,10 @@ class DevpostClient:
         self,
         query: str,
         limit: int = 20,
+        order_by: Optional[str] = None,
     ) -> list[dict]:
         """Search projects via /software/search."""
-        cache_key = make_search_projects_key(query, limit)
+        cache_key = make_search_projects_key(query, limit, order_by)
         if self._cache:
             cached = self._cache.get(cache_key)
             if cached is not None:
@@ -1412,14 +1533,17 @@ class DevpostClient:
 
         projects = []
         page = 1
-        max_pages = (limit + 11) // 12
+        max_pages = (limit + 23) // 24
 
         while page <= max_pages and len(projects) < limit:
             try:
+                params = {"query": query, "page": page}
+                if order_by and order_by != "newest":
+                    params["order_by"] = order_by
                 resp = await self._request_with_retry(
                     "GET",
                     f"{BASE_URL}/software/search",
-                    params={"q": query, "page": page},
+                    params=params,
                 )
                 soup = BeautifulSoup(resp.text, "html.parser")
                 project_cards = soup.find_all(class_=re.compile(r'software-entry|project-item|gallery-item', re.I))
@@ -1808,6 +1932,29 @@ class DevpostClient:
             self._cache.set(cache_key, result)
 
         return result
+
+    async def get_themes(self, popular: bool = False) -> list[dict]:
+        """Get all themes or popular themes from API."""
+        endpoint = "themes/popular" if popular else "themes"
+        cache_key = f"themes_{'popular' if popular else 'all'}"
+        
+        if self._cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        resp = await self._request_with_retry(
+            "GET",
+            f"{API_BASE}/{endpoint}",
+            headers={"Accept": "application/json"},
+        )
+        data = resp.json()
+        
+        themes = data.get("themes", [])
+        if self._cache:
+            self._cache.set(cache_key, themes)
+        
+        return themes
 
     async def get_discussions(self, slug: str, limit: int = 20) -> dict[str, Any]:
         """Get discussions/forum topics from /{slug}/forum_topics."""
