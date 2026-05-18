@@ -8,8 +8,6 @@ from typing import Any, Optional
 
 import click
 from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
 
 from .core import (
     AuthenticatedClient,
@@ -163,25 +161,15 @@ def hackathons(
                 return
 
             total = meta.get("total_count", len(hackathons_list))
-            table = Table(title=f"Hackathons on Devpost ({len(hackathons_list)} of {total})")
-            table.add_column("Title", style="cyan", no_wrap=True)
-            table.add_column("Status", style="green")
-            table.add_column("Prize", style="yellow")
-            table.add_column("Ends", style="magenta")
+            console.print(f"[dim]({len(hackathons_list)} of {total})[/dim]")
+            console.print("")
 
             for h in hackathons_list:
                 status = h.get("open_state", "unknown")
-                prize = h.get("prize_amount", "N/A")
-                ends = h.get("ends_at", "N/A")
-
-                table.add_row(
-                    h.get("title", "Unknown")[:50],
-                    status,
-                    prize if prize else "N/A",
-                    ends if ends else "N/A",
-                )
-
-            console.print(table)
+                prize = h.get("prize_amount") or "N/A"
+                ends = h.get("ends_at") or "N/A"
+                title = h.get("title", "Unknown")[:50]
+                console.print(f"{title}\t{status}\t{prize}\t{ends}")
 
     _run_async(_hackathons())
 
@@ -218,25 +206,12 @@ async def _list_cmd(limit: int, state: Optional[str], sort: str, query: Optional
             console.print("[yellow]No hackathons found.[/yellow]")
             return
 
-        table = Table(title="Hackathons on Devpost")
-        table.add_column("Title", style="cyan", no_wrap=True)
-        table.add_column("Status", style="green")
-        table.add_column("Prize", style="yellow")
-        table.add_column("Ends", style="magenta")
-
         for h in hackathons_list:
             status = h.get("open_state", "unknown")
-            prize = h.get("prize_amount", "N/A")
-            ends = h.get("ends_at", "N/A")
-
-            table.add_row(
-                h.get("title", "Unknown")[:50],
-                status,
-                prize if prize else "N/A",
-                ends if ends else "N/A",
-            )
-
-        console.print(table)
+            prize = h.get("prize_amount") or "N/A"
+            ends = h.get("ends_at") or "N/A"
+            title = h.get("title", "Unknown")[:50]
+            console.print(f"{title}\t{status}\t{prize}\t{ends}")
 
 
 @cli.command()
@@ -269,74 +244,49 @@ def overview(slug: str, is_json: Optional[bool]):
             if output_json(hackathon, is_json):
                 return
 
-            # Build extended info
-            lines = [
-                f"[bold cyan]{hackathon.get('title', 'Unknown')}[/bold cyan]\n\n"
-                f"[green]URL:[/green] {hackathon.get('url', 'N/A')}\n"
-                f"[green]Status:[/green] {hackathon.get('open_state', 'unknown')}",
-            ]
+            console.print(f"[cyan]{hackathon.get('title', 'Unknown')}[/cyan]")
+            console.print(f"url: {hackathon.get('url', 'N/A')}")
+            console.print(f"status: {hackathon.get('open_state', 'unknown')}")
             
-            # Add featured badge if applicable
             if hackathon.get("featured"):
-                lines.append("[yellow]★ Featured[/yellow]")
+                console.print("featured: yes")
             
-            # Add prize info
-            prize = hackathon.get('prize_amount', 'N/A')
-            lines.append(f"[green]Prize:[/green] {prize}")
+            console.print(f"prize: {hackathon.get('prize_amount', 'N/A')}")
             
-            # Add prize counts if available
             prize_counts = hackathon.get('prizes_counts', {})
             if prize_counts:
                 cash = prize_counts.get('cash', 0)
                 other = prize_counts.get('other', 0)
-                lines.append(f"[green]Prize categories:[/green] {cash} cash, {other} other")
+                console.print(f"prize_categories: {cash} cash, {other} other")
             
-            # Add participant/submission counts
-            submissions = hackathon.get('submissions_count', 'N/A')
-            registrations = hackathon.get('registrations_count', 'N/A')
-            lines.append(f"[green]Submissions:[/green] {submissions}")
-            if registrations != 'N/A':
-                lines.append(f"[green]Registrations:[/green] {registrations}")
+            console.print(f"submissions: {hackathon.get('submissions_count', 'N/A')}")
+            if hackathon.get('registrations_count') != 'N/A':
+                console.print(f"registrations: {hackathon['registrations_count']}")
             
-            # Add dates
-            lines.append(f"[green]Ends:[/green] {hackathon.get('ends_at', 'N/A')}")
+            console.print(f"ends: {hackathon.get('ends_at', 'N/A')}")
             if hackathon.get('submission_period_dates'):
-                lines.append(f"[green]Period:[/green] {hackathon['submission_period_dates']}")
+                console.print(f"period: {hackathon['submission_period_dates']}")
             
-            # Add access type
-            if hackathon.get('invite_only'):
-                lines.append("[green]Access:[/green] Invite-only")
-            else:
-                lines.append("[green]Access:[/green] Public")
+            access = "invite-only" if hackathon.get('invite_only') else "public"
+            console.print(f"access: {access}")
             
-            # Add organization
             if hackathon.get('organization_name'):
-                lines.append(f"[green]Organization:[/green] {hackathon['organization_name']}")
+                console.print(f"organization: {hackathon['organization_name']}")
             
-            # Add Devpost-managed badge
             if hackathon.get('managed_by_devpost_badge'):
-                lines.append("[green]Managed by:[/green] Devpost")
+                console.print("managed_by: Devpost")
             
-            # Add themes
             themes = hackathon.get('themes', [])
             if themes:
                 theme_names = [t.get('name', '') for t in themes if t.get('name')]
                 if theme_names:
-                    lines.append(f"[green]Themes:[/green] {', '.join(theme_names[:5])}")
+                    console.print(f"themes: {', '.join(theme_names[:5])}")
             
-            # Add submission gallery URL
             if hackathon.get('submission_gallery_url'):
-                lines.append(f"[green]Gallery:[/green] {hackathon['submission_gallery_url']}")
+                console.print(f"gallery: {hackathon['submission_gallery_url']}")
             
-            # Add tagline/description
             tagline = hackathon.get('tagline', 'No description')
-            lines.append(f"\n{tagline[:300]}")
-            
-            console.print(Panel(
-                "\n".join(lines),
-                title="Hackathon Details",
-                border_style="yellow" if hackathon.get("featured") else "blue"
-            ))
+            console.print(f"\n{tagline[:300]}")
 
     _run_async(_info())
 
@@ -363,57 +313,46 @@ async def _info_cmd(slug: str, is_json: Optional[bool]):
         if output_json(hackathon, is_json):
             return
 
-        # Build extended info (same as overview command)
-        lines = [
-            f"[bold cyan]{hackathon.get('title', 'Unknown')}[/bold cyan]\n\n"
-            f"[green]URL:[/green] {hackathon.get('url', 'N/A')}\n"
-            f"[green]Status:[/green] {hackathon.get('open_state', 'unknown')}",
-        ]
+        console.print(f"[cyan]{hackathon.get('title', 'Unknown')}[/cyan]")
+        console.print(f"url: {hackathon.get('url', 'N/A')}")
+        console.print(f"status: {hackathon.get('open_state', 'unknown')}")
         
         if hackathon.get("featured"):
-            lines.append("[yellow]★ Featured[/yellow]")
+            console.print("featured: yes")
         
-        lines.append(f"[green]Prize:[/green] {hackathon.get('prize_amount', 'N/A')}")
+        console.print(f"prize: {hackathon.get('prize_amount', 'N/A')}")
         
         prize_counts = hackathon.get('prizes_counts', {})
         if prize_counts:
-            lines.append(f"[green]Prize categories:[/green] {prize_counts.get('cash', 0)} cash, {prize_counts.get('other', 0)} other")
+            console.print(f"prize_categories: {prize_counts.get('cash', 0)} cash, {prize_counts.get('other', 0)} other")
         
-        lines.append(f"[green]Submissions:[/green] {hackathon.get('submissions_count', 'N/A')}")
+        console.print(f"submissions: {hackathon.get('submissions_count', 'N/A')}")
         if hackathon.get('registrations_count') != 'N/A':
-            lines.append(f"[green]Registrations:[/green] {hackathon.get('registrations_count')}")
+            console.print(f"registrations: {hackathon.get('registrations_count')}")
         
-        lines.append(f"[green]Ends:[/green] {hackathon.get('ends_at', 'N/A')}")
+        console.print(f"ends: {hackathon.get('ends_at', 'N/A')}")
         if hackathon.get('submission_period_dates'):
-            lines.append(f"[green]Period:[/green] {hackathon['submission_period_dates']}")
+            console.print(f"period: {hackathon['submission_period_dates']}")
         
-        if hackathon.get('invite_only'):
-            lines.append("[green]Access:[/green] Invite-only")
-        else:
-            lines.append("[green]Access:[/green] Public")
+        access = "invite-only" if hackathon.get('invite_only') else "public"
+        console.print(f"access: {access}")
         
         if hackathon.get('organization_name'):
-            lines.append(f"[green]Organization:[/green] {hackathon['organization_name']}")
+            console.print(f"organization: {hackathon['organization_name']}")
         
         if hackathon.get('managed_by_devpost_badge'):
-            lines.append("[green]Managed by:[/green] Devpost")
+            console.print("managed_by: Devpost")
         
         themes = hackathon.get('themes', [])
         if themes:
             theme_names = [t.get('name', '') for t in themes if t.get('name')]
             if theme_names:
-                lines.append(f"[green]Themes:[/green] {', '.join(theme_names[:5])}")
+                console.print(f"themes: {', '.join(theme_names[:5])}")
         
         if hackathon.get('submission_gallery_url'):
-            lines.append(f"[green]Gallery:[/green] {hackathon['submission_gallery_url']}")
+            console.print(f"gallery: {hackathon['submission_gallery_url']}")
         
-        lines.append(f"\n{hackathon.get('tagline', 'No description')[:300]}")
-        
-        console.print(Panel(
-            "\n".join(lines),
-            title="Hackathon Details",
-            border_style="yellow" if hackathon.get("featured") else "blue"
-        ))
+        console.print(f"\n{hackathon.get('tagline', 'No description')[:300]}")
 
 
 @cli.command()
@@ -446,17 +385,13 @@ def scrape(url: str, is_json: bool, output: Optional[str]):
                     click.echo(output_data)
                 return
 
-            console.print(Panel(
-                f"[bold cyan]{data.get('data', {}).get('title', 'Unknown')}[/bold cyan]\n\n"
-                f"[green]URL:[/green] {data.get('url', 'N/A')}\n"
-                f"[green]Gallery:[/green] {data.get('data', {}).get('gallery_url', 'N/A')}\n"
-                f"[green]Rules:[/green] {data.get('data', {}).get('rules_url', 'N/A')}\n"
-                f"[green]Prizes:[/green] {data.get('data', {}).get('prize_summary', 'N/A')}\n\n"
-                f"[dim]Stats:[/dim] {json.dumps(data.get('data', {}).get('stats', {}), default=str)}\n\n"
-                f"{data.get('data', {}).get('description', 'No description')[:400]}",
-                title="Scraped Hackathon Data",
-                border_style="green"
-            ))
+            console.print(f"[cyan]{data.get('data', {}).get('title', 'Unknown')}[/cyan]")
+            console.print(f"url: {data.get('url', 'N/A')}")
+            console.print(f"gallery: {data.get('data', {}).get('gallery_url', 'N/A')}")
+            console.print(f"rules: {data.get('data', {}).get('rules_url', 'N/A')}")
+            console.print(f"prizes: {data.get('data', {}).get('prize_summary', 'N/A')}")
+            console.print(f"stats: {json.dumps(data.get('data', {}).get('stats', {}), default=str)}")
+            console.print(f"\n{data.get('data', {}).get('description', 'No description')[:400]}")
 
     _run_async(_scrape())
 
@@ -514,20 +449,12 @@ def gallery(
                 console.print("[yellow]No projects found.[/yellow]")
                 return
 
-            table = Table(title=f"Gallery: {slug}")
-            table.add_column("Title", style="cyan")
-            table.add_column("Winner", style="yellow")
-            table.add_column("URL", style="dim")
-
+            console.print(f"[dim]({len(result['projects'])} projects)[/dim]")
             for p in result["projects"]:
-                table.add_row(
-                    p.get("title", "Unknown")[:50],
-                    "★ YES" if p.get("is_winner") else "No",
-                    p.get("url", "N/A")[:60],
-                )
-
-            console.print(table)
-            console.print(f"\n[dim]Showing {len(result['projects'])} projects[/dim]")
+                title = p.get("title", "Unknown")[:50]
+                winner = "★" if p.get("is_winner") else ""
+                url = p.get("url", "N/A")
+                console.print(f"{title}{winner}\t{url}")
 
     _run_async(_gallery())
 
@@ -563,20 +490,12 @@ async def _projects_cmd(slug: str, limit: int, winners: bool, is_json: Optional[
             console.print("[yellow]No projects found.[/yellow]")
             return
 
-        table = Table(title=f"Projects from {url}")
-        table.add_column("Title", style="cyan")
-        table.add_column("Winner", style="yellow")
-        table.add_column("URL", style="dim")
-
+        console.print(f"[dim]({len(result['projects'])} projects)[/dim]")
         for p in result["projects"]:
-            table.add_row(
-                p.get("title", "Unknown")[:50],
-                "★ YES" if p.get("is_winner") else "No",
-                p.get("url", "N/A")[:60],
-            )
-
-        console.print(table)
-        console.print(f"\n[dim]Showing {len(result['projects'])} projects[/dim]")
+            title = p.get("title", "Unknown")[:50]
+            winner = "★" if p.get("is_winner") else ""
+            url = p.get("url", "N/A")
+            console.print(f"{title}{winner}\t{url}")
 
 
 @cli.command()
@@ -605,22 +524,22 @@ def project(url: str, is_json: Optional[bool]):
                 sys.exit(1)
 
             data = details.get("data", {})
-            winner_badge = "[yellow]★ WINNER[/yellow]\n" if data.get("is_winner") else ""
-
+            
+            console.print(f"[cyan]{data.get('title', 'Unknown')}[/cyan]")
+            if data.get("is_winner"):
+                console.print("winner: yes")
+            console.print(f"url: {details.get('url', 'N/A')}")
+            console.print(f"\n[dim]Description:[/dim]")
+            console.print(f"{data.get('description', 'No description')[:500]}")
+            
             tech_stack = ", ".join(data.get("built_with", [])) or "Not specified"
+            console.print(f"\ntech_stack: {tech_stack}")
+            
             links = data.get("links", {})
-            links_str = "\n".join([f"[green]{k}:[/green] {v}" for k, v in links.items()]) or "None"
-
-            console.print(Panel(
-                f"[bold cyan]{data.get('title', 'Unknown')}[/bold cyan]\n"
-                f"{winner_badge}\n"
-                f"[green]URL:[/green] {details.get('url', 'N/A')}\n\n"
-                f"[dim]Description:[/dim]\n{data.get('description', 'No description')[:500]}\n\n"
-                f"[dim]Tech Stack:[/dim] {tech_stack}\n\n"
-                f"[dim]Links:[/dim]\n{links_str}",
-                title="Project Details",
-                border_style="cyan" if data.get("is_winner") else "blue"
-            ))
+            if links:
+                console.print("\nlinks:")
+                for k, v in links.items():
+                    console.print(f"  {k}: {v}")
 
     _run_async(_project())
 
@@ -654,54 +573,42 @@ def user(username: str, is_json: Optional[bool], verbose: bool):
 
             data = profile.get("data", {})
             
-            lines = [
-                f"[bold cyan]{data.get('name', username)}[/bold cyan]",
-                f"[green]Username:[/green] {username}",
-                f"[green]Profile:[/green] {BASE_URL}/users/{username}",
-            ]
+            console.print(f"[cyan]{data.get('name', username)}[/cyan]")
+            console.print(f"username: {username}")
+            console.print(f"profile: {BASE_URL}/users/{username}")
             
             if data.get("bio"):
-                lines.append(f"\n[dim]{data['bio'][:300]}[/dim]")
+                console.print(f"\n[dim]{data['bio'][:300]}[/dim]")
             
             if data.get("location"):
-                lines.append(f"\n[green]Location:[/green] {data['location']}")
+                console.print(f"location: {data['location']}")
             
             if data.get("skills"):
-                lines.append(f"\n[green]Skills:[/green] {', '.join(data['skills'][:10])}")
+                console.print(f"skills: {', '.join(data['skills'][:10])}")
             
-            # Show project count and list if verbose
             projects = data.get("projects", [])
-            lines.append(f"\n[green]Projects:[/green] {len(projects)}")
+            console.print(f"projects: {len(projects)}")
             if verbose and projects:
-                lines.append("\n[bold]Project List:[/bold]")
                 for p in projects:
-                    proj_line = f"  • {p.get('title', 'Unknown')}"
+                    title = p.get('title', 'Unknown')
+                    console.print(f"  {title}")
                     if p.get('hackathon'):
-                        proj_line += f" [dim](from {p['hackathon']})[/dim]"
-                    if p.get('stats'):
-                        proj_line += f" [dim]{p['stats']}[/dim]"
-                    lines.append(proj_line)
+                        console.print(f"    [dim]from {p['hackathon']}[/dim]")
             
-            # Show hackathon count and list if verbose
             hackathons = data.get("hackathons", [])
-            lines.append(f"\n[green]Hackathon participations:[/green] {len(hackathons)}")
+            console.print(f"hackathons: {len(hackathons)}")
             if verbose and hackathons:
-                lines.append("\n[bold]Hackathons:[/bold]")
                 for h in hackathons[:15]:
-                    lines.append(f"  • {h.get('name', 'Unknown')} [dim]→ {h.get('url', '')[:50]}[/dim]")
+                    name = h.get('name', 'Unknown')
+                    url = h.get('url', '')
+                    console.print(f"  {name}")
+                    console.print(f"    [dim]{url}[/dim]")
                 if len(hackathons) > 15:
-                    lines.append(f"  [dim]... and {len(hackathons) - 15} more[/dim]")
+                    console.print(f"  [dim]... and {len(hackathons) - 15} more[/dim]")
             
             if data.get("links"):
-                lines.append("\n[green]Social Links:[/green]")
                 for k, v in data["links"].items():
-                    lines.append(f"  {k}: {v}")
-
-            console.print(Panel(
-                "\n".join(lines),
-                title="User Profile",
-                border_style="blue"
-            ))
+                    console.print(f"{k}: {v}")
 
     _run_async(_user())
 
@@ -737,34 +644,25 @@ def achievements(username: str, is_json: Optional[bool], verbose: bool):
             achievements_list = data.get("achievements", [])
             total_count = data.get("total_count", len(achievements_list))
             
-            lines = [
-                f"[bold cyan]{username}[/bold cyan]",
-                f"[green]Achievements page:[/green] {BASE_URL}/{username}/achievements",
-                f"\n[green]Total achievements:[/green] {total_count}",
-            ]
+            console.print(f"[cyan]{username}[/cyan]")
+            console.print(f"achievements_page: {BASE_URL}/{username}/achievements")
+            console.print(f"total: {total_count}")
             
             if achievements_list:
-                lines.append("\n[bold]Achievement List:[/bold]")
                 for a in achievements_list[:20]:
                     title = a.get('title', 'Unknown')
-                    lines.append(f"  • [bold]{title}[/bold]")
+                    console.print(f"  {title}")
                     
                     if verbose:
                         if a.get('description'):
-                            lines.append(f"    [dim]{a['description'][:200]}[/dim]")
+                            console.print(f"    [dim]{a['description'][:200]}[/dim]")
                         if a.get('earned'):
-                            lines.append(f"    [green]Earned:[/green] {a['earned']}")
-                    
-                    if len(achievements_list) > 20:
-                        lines.append(f"  [dim]... and {len(achievements_list) - 20} more[/dim]")
+                            console.print(f"    earned: {a['earned']}")
+                
+                if len(achievements_list) > 20:
+                    console.print(f"  [dim]... and {len(achievements_list) - 20} more[/dim]")
             else:
-                lines.append("\n[dim]No achievements found.[/dim]")
-
-            console.print(Panel(
-                "\n".join(lines),
-                title="User Achievements",
-                border_style="blue"
-            ))
+                console.print("[dim]No achievements found.[/dim]")
 
     _run_async(_achievements())
 
@@ -797,6 +695,8 @@ def rules(slug: str, is_json: Optional[bool], no_cache: bool):
                 console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/red]")
                 sys.exit(1)
 
+            console.print(f"[cyan]{slug}[/cyan] — Rules\n")
+            
             sections = [
                 ("Eligibility", result.get("eligibility", [])),
                 ("Requirements", result.get("requirements", [])),
@@ -805,30 +705,29 @@ def rules(slug: str, is_json: Optional[bool], no_cache: bool):
                 ("Key Dates", result.get("key_dates", [])),
             ]
 
-            content_parts = [f"[bold cyan]{slug}[/bold cyan] — Rules\n"]
-
             for label, items in sections:
                 if items:
-                    content_parts.append(f"[green]{label}:[/green]")
+                    console.print(f"{label}:")
                     for item in items:
-                        content_parts.append(f"  • {item[:200]}")
-                    content_parts.append("")
+                        console.print(f"  - {item[:200]}")
+                    console.print("")
 
             if result.get("prize_categories"):
-                content_parts.append("[green]Prize Categories:[/green]")
+                console.print("Prize Categories:")
                 for cat in result["prize_categories"]:
-                    content_parts.append(f"  • {cat[:200]}")
-                content_parts.append("")
+                    console.print(f"  - {cat[:200]}")
+                console.print("")
 
-            if len(content_parts) <= 2:
-                content_parts.append("[dim]No structured rules sections found on the page.[/dim]")
-                content_parts.append(f"[dim]Raw text length: {result.get('raw_text_length', 0)} chars[/dim]")
-
-            console.print(Panel(
-                "\n".join(content_parts),
-                title=f"Rules: {slug}",
-                border_style="blue",
-            ))
+            if not any([
+                result.get("eligibility"),
+                result.get("requirements"),
+                result.get("judging_criteria"),
+                result.get("sponsor_apis"),
+                result.get("key_dates"),
+                result.get("prize_categories"),
+            ]):
+                console.print("[dim]No structured rules sections found.[/dim]")
+                console.print(f"[dim]Raw text length: {result.get('raw_text_length', 0)} chars[/dim]")
 
     _run_async(_rules())
 
@@ -865,20 +764,12 @@ def winners(slug: str, is_json: Optional[bool], no_cache: bool):
                 console.print(f"[yellow]{msg}[/yellow]")
                 return
 
-            table = Table(title=f"Winners: {slug}")
-            table.add_column("Title", style="cyan")
-            table.add_column("Prize", style="yellow")
-            table.add_column("URL", style="dim")
-
+            console.print(f"[dim]({result['count']} winning projects)[/dim]")
             for w in result["winners"]:
-                table.add_row(
-                    w.get("title", "Unknown")[:50],
-                    w.get("prize", "Winner"),
-                    w.get("url", "N/A")[:60],
-                )
-
-            console.print(table)
-            console.print(f"\n[dim]Showing {result['count']} winning project(s)[/dim]")
+                title = w.get("title", "Unknown")[:50]
+                prize = w.get("prize", "Winner")
+                url = w.get("url", "N/A")
+                console.print(f"{title}\t{prize}\t{url}")
 
     _run_async(_winners())
 
@@ -916,78 +807,53 @@ def evaluate(slug: str, skills: Optional[str], is_json: Optional[bool], no_cache
 
             verdict = result.get("verdict", "Maybe")
             reason = result.get("verdict_reason", "")
-            verdict_style = {"Enter": "green", "Maybe": "yellow", "Skip": "red"}.get(verdict, "white")
-
+            
             basics = result.get("basics", {})
             competition = result.get("competition", {})
             signals = result.get("signals", {})
 
-            content_parts = [
-                f"[bold {verdict_style}]VERDICT: {verdict.upper()}[/bold {verdict_style}]",
-                f"{reason}",
-                "",
-                f"[bold]Basics[/bold]",
-                f"  [green]Title:[/green] {basics.get('title', 'Unknown')}",
-                f"  [green]Prize:[/green] {basics.get('prize', 'N/A')}",
-                f"  [green]Status:[/green] {basics.get('status', 'unknown')}",
-                f"  [green]Dates:[/green] {basics.get('dates', 'N/A')}",
-                f"  [green]Org:[/green] {basics.get('organization', 'N/A')}",
-                f"  [green]Themes:[/green] {', '.join(basics.get('themes', [])) or 'N/A'}",
-                "",
-                f"[bold]Competition[/bold]",
-                f"  Registrants: {competition.get('registrants', 'N/A')}",
-                f"  Submissions: {competition.get('submissions', 'N/A')}",
-                f"  Prize per project: ${competition.get('prize_per_project', 0):,.0f}",
-                f"  Registrants per prize: {competition.get('registrants_per_prize', 0):.0f}",
-            ]
+            console.print(f"verdict: {verdict.upper()}")
+            console.print(f"reason: {reason}")
+            console.print("")
+            
+            console.print("basics:")
+            console.print(f"  title: {basics.get('title', 'Unknown')}")
+            console.print(f"  prize: {basics.get('prize', 'N/A')}")
+            console.print(f"  status: {basics.get('status', 'unknown')}")
+            console.print(f"  dates: {basics.get('dates', 'N/A')}")
+            console.print(f"  organization: {basics.get('organization', 'N/A')}")
+            console.print(f"  themes: {', '.join(basics.get('themes', [])) or 'N/A'}")
+            console.print("")
+            
+            console.print("competition:")
+            console.print(f"  registrants: {competition.get('registrants', 'N/A')}")
+            console.print(f"  submissions: {competition.get('submissions', 'N/A')}")
+            console.print(f"  prize_per_project: ${competition.get('prize_per_project', 0):,.0f}")
+            console.print(f"  registrants_per_prize: {competition.get('registrants_per_prize', 0):.0f}")
+            console.print("")
 
-            if result.get("eligibility"):
-                content_parts.append(f"\n[bold]Eligibility[/bold]")
-                for item in result["eligibility"][:5]:
-                    content_parts.append(f"  • {item[:150]}")
+            for label, key in [
+                ("eligibility", "eligibility"),
+                ("requirements", "requirements"),
+                ("judging_criteria", "judging_criteria"),
+                ("sponsor_apis", "sponsor_apis"),
+                ("prize_categories", "prize_categories"),
+                ("key_dates", "key_dates"),
+            ]:
+                if result.get(key):
+                    console.print(f"{label}:")
+                    for item in result[key][:5]:
+                        console.print(f"  - {item[:150]}")
+                    console.print("")
 
-            if result.get("requirements"):
-                content_parts.append(f"\n[bold]Requirements[/bold]")
-                for item in result["requirements"][:5]:
-                    content_parts.append(f"  • {item[:150]}")
-
-            if result.get("judging_criteria"):
-                content_parts.append(f"\n[bold]Judging Criteria[/bold]")
-                for item in result["judging_criteria"][:5]:
-                    content_parts.append(f"  • {item[:150]}")
-
-            if result.get("sponsor_apis"):
-                content_parts.append(f"\n[bold]Sponsor APIs / Tech[/bold]")
-                for item in result["sponsor_apis"][:5]:
-                    content_parts.append(f"  • {item[:150]}")
-
-            if result.get("prize_categories"):
-                content_parts.append(f"\n[bold]Prize Categories[/bold]")
-                for cat in result["prize_categories"][:8]:
-                    content_parts.append(f"  • {cat[:150]}")
-
-            if result.get("key_dates"):
-                content_parts.append(f"\n[bold]Key Dates[/bold]")
-                for d in result["key_dates"][:5]:
-                    content_parts.append(f"  • {d[:150]}")
-
-            signal_rows = []
+            console.print("signals:")
             for name, sig in signals.items():
                 level = sig.get("level", "unknown")
-                level_style = {"high": "green", "medium": "yellow", "low": "red", "wide_open": "green", "critical": "bold red", "closed": "dim"}.get(level, "white")
-                signal_rows.append(f"  {name.replace('_', ' ').title()}: [{level_style}]{level}[/{level_style}] — {sig.get('detail', '')}")
-
-            content_parts.append(f"\n[bold]Signals[/bold]")
-            content_parts.extend(signal_rows)
+                detail = sig.get("detail", "")
+                console.print(f"  {name.replace('_', ' ')}: {level} — {detail}")
 
             if result.get("errors"):
-                content_parts.append(f"\n[dim]Partial data errors: {'; '.join(result['errors'])}[/dim]")
-
-            console.print(Panel(
-                "\n".join(content_parts),
-                title=f"Evaluate: {slug}",
-                border_style=verdict_style,
-            ))
+                console.print(f"\n[dim]errors: {'; '.join(result['errors'])}[/dim]")
 
     _run_async(_evaluate())
 
@@ -1216,20 +1082,12 @@ def participants(slug: str, limit: int, is_json: Optional[bool]):
                 console.print("[yellow]No participants found.[/yellow]")
                 return
 
-            table = Table(title=f"Participants: {slug}")
-            table.add_column("Username", style="cyan")
-            table.add_column("Name", style="green")
-            table.add_column("URL", style="dim")
-
+            console.print(f"[dim]({result['count']} participants)[/dim]")
             for p in result["participants"]:
-                table.add_row(
-                    p.get("username", "Unknown")[:30],
-                    p.get("name", "")[:30],
-                    p.get("url", "")[:50],
-                )
-
-            console.print(table)
-            console.print(f"\n[dim]Showing {result['count']} participants[/dim]")
+                username = p.get("username", "Unknown")[:30]
+                name = p.get("name", "")[:30]
+                url = p.get("url", "")
+                console.print(f"{username}\t{name}\t{url}")
 
     _run_async(_participants())
 
@@ -1260,18 +1118,11 @@ def resources(slug: str, is_json: Optional[bool]):
                 console.print("[yellow]No resources found.[/yellow]")
                 return
 
-            table = Table(title=f"Resources: {slug}")
-            table.add_column("Title", style="cyan")
-            table.add_column("URL", style="dim")
-
+            console.print(f"[dim]({len(result['resources'])} resources)[/dim]")
             for r in result["resources"]:
-                table.add_row(
-                    r.get("title", "Unknown")[:50],
-                    r.get("url", "")[:60],
-                )
-
-            console.print(table)
-            console.print(f"\n[dim]Showing {len(result['resources'])} resources[/dim]")
+                title = r.get("title", "Unknown")[:50]
+                url = r.get("url", "")
+                console.print(f"{title}\t{url}")
 
     _run_async(_resources())
 
@@ -1347,22 +1198,13 @@ def discussions(slug: str, limit: int, is_json: Optional[bool]):
                 console.print("[yellow]No discussions found.[/yellow]")
                 return
 
-            table = Table(title=f"Discussions: {slug}")
-            table.add_column("Title", style="cyan")
-            table.add_column("Author", style="green")
-            table.add_column("Replies", style="yellow")
-            table.add_column("Date", style="dim")
-
+            console.print(f"[dim]({result['count']} discussions)[/dim]")
             for d in result["discussions"]:
-                table.add_row(
-                    d.get("title", "Untitled")[:40],
-                    d.get("author", "")[:20] or "N/A",
-                    d.get("replies", "")[:10] or "0",
-                    d.get("date", "")[:15] or "N/A",
-                )
-
-            console.print(table)
-            console.print(f"\n[dim]Showing {result['count']} discussions[/dim]")
+                title = d.get("title", "Untitled")[:40]
+                author = d.get("author", "")[:20] or "N/A"
+                replies = d.get("replies", "") or "0"
+                date = d.get("date", "") or "N/A"
+                console.print(f"{title}\t{author}\t{replies}\t{date}")
 
     _run_async(_discussions())
 
@@ -1408,13 +1250,9 @@ def dates(slug: str, is_json: Optional[bool]):
             if output_json(result, is_json):
                 return
             
-            console.print(Panel(
-                f"[bold cyan]{hackathon.get('title', slug)}[/bold cyan]\n\n"
-                f"[green]Dates:[/green] {dates_info}\n"
-                f"[green]Time left:[/green] {time_left or 'N/A'}",
-                title="Schedule",
-                border_style="blue",
-            ))
+            console.print(f"[cyan]{hackathon.get('title', slug)}[/cyan]")
+            console.print(f"dates: {dates_info}")
+            console.print(f"time_left: {time_left or 'N/A'}")
     
     _run_async(_dates())
 
@@ -1436,12 +1274,9 @@ def eligibility(slug: str, is_json: Optional[bool]):
                 console.print("[yellow]No eligibility rules found.[/yellow]")
                 return
             
-            console.print(Panel(
-                f"[bold cyan]{slug}[/bold cyan] — Eligibility\n\n"
-                + "\n".join([f"• {item[:200]}" for item in eligibility[:10]]),
-                title="Eligibility Rules",
-                border_style="blue",
-            ))
+            console.print(f"[cyan]{slug}[/cyan] — Eligibility\n")
+            for item in eligibility[:10]:
+                console.print(f"  - {item[:200]}")
     
     _run_async(_eligibility())
 
@@ -1463,12 +1298,9 @@ def requirements(slug: str, is_json: Optional[bool]):
                 console.print("[yellow]No requirements found.[/yellow]")
                 return
             
-            console.print(Panel(
-                f"[bold cyan]{slug}[/bold cyan] — Requirements\n\n"
-                + "\n".join([f"• {item[:200]}" for item in requirements[:10]]),
-                title="Submission Requirements",
-                border_style="blue",
-            ))
+            console.print(f"[cyan]{slug}[/cyan] — Requirements\n")
+            for item in requirements[:10]:
+                console.print(f"  - {item[:200]}")
     
     _run_async(_requirements())
 
@@ -1490,12 +1322,9 @@ def judging(slug: str, is_json: Optional[bool]):
                 console.print("[yellow]No judging criteria found.[/yellow]")
                 return
             
-            console.print(Panel(
-                f"[bold cyan]{slug}[/bold cyan] — Judging Criteria\n\n"
-                + "\n".join([f"• {item[:200]}" for item in judging[:10]]),
-                title="Judging Criteria",
-                border_style="blue",
-            ))
+            console.print(f"[cyan]{slug}[/cyan] — Judging Criteria\n")
+            for item in judging[:10]:
+                console.print(f"  - {item[:200]}")
     
     _run_async(_judging())
 
@@ -1519,12 +1348,9 @@ def prizes(slug: str, is_json: Optional[bool]):
                 console.print(f"[yellow]No detailed prize breakdown found. Total: {prize_amount}[/yellow]")
                 return
             
-            console.print(Panel(
-                f"[bold cyan]{slug}[/bold cyan] — Prizes\n\n"
-                + "\n".join([f"• {item[:200]}" for item in prizes[:15]]),
-                title="Prize Breakdown",
-                border_style="yellow",
-            ))
+            console.print(f"[cyan]{slug}[/cyan] — Prizes\n")
+            for item in prizes[:15]:
+                console.print(f"  - {item[:200]}")
     
     _run_async(_prizes())
 
@@ -1572,19 +1398,16 @@ def faq(slug: str, is_json: Optional[bool]):
                     return
                 
                 if faq_items:
-                    console.print(Panel(
-                        f"[bold cyan]{slug}[/bold cyan] — FAQ\n\n"
-                        + "\n\n".join([f"[green]Q:[/green] {item[:300]}" for item in faq_items[:5]]),
-                        title="FAQ",
-                        border_style="cyan",
-                    ))
+                    console.print(f"[cyan]{slug}[/cyan] — FAQ\n")
+                    for item in faq_items[:5]:
+                        console.print(f"  {item[:300]}\n")
                 elif help_links:
                     console.print(f"[yellow]No hackathon-specific FAQ found. Check the Devpost Help Desk:[/yellow]")
                     for link in help_links[:2]:
-                        console.print(f"  • {link}")
+                        console.print(f"  {link}")
                 else:
-                    console.print("[yellow]No FAQ content found for this hackathon.[/yellow]")
-                    console.print("  Check the Devpost Help Desk: https://help.devpost.com/")
+                    console.print("[yellow]No FAQ content found.[/yellow]")
+                    console.print("  Check: https://help.devpost.com/")
                     
             finally:
                 await client_http.aclose()
@@ -1616,22 +1439,15 @@ def themes(popular: bool, is_json: Optional[bool]):
                 return
             
             if popular:
-                table = Table(title="Popular Themes")
-                table.add_column("Theme", style="cyan")
-                table.add_column("Active Hackathons", style="green")
-                table.add_column("Total Prize", style="yellow")
-                
+                console.print("(Popular Themes)")
                 for t in themes_list:
-                    table.add_row(
-                        t.get("name", "Unknown"),
-                        str(t.get("active_count", 0)),
-                        t.get("total_prize", "N/A"),
-                    )
-                console.print(table)
+                    name = t.get("name", "Unknown")
+                    count = t.get("active_count", 0)
+                    prize = t.get("total_prize", "N/A")
+                    console.print(f"{name}\t{count}\t{prize}")
             else:
-                console.print("[bold]All Devpost Themes:[/bold]\n")
                 for i, t in enumerate(themes_list, 1):
-                    console.print(f"  {i:2}. {t.get('name', 'Unknown')}")
+                    console.print(f"{i:2}. {t.get('name', 'Unknown')}")
     
     _run_async(_themes())
 
@@ -1659,9 +1475,8 @@ def trending(is_json: Optional[bool]):
                 console.print("[yellow]No trending technologies found.[/yellow]")
                 return
             
-            console.print("[bold]Trending Technologies on Devpost:[/bold]\n")
             for i, tech in enumerate(technologies, 1):
-                console.print(f"  {i:2}. {tech}")
+                console.print(f"{i:2}. {tech}")
     
     _run_async(_trending())
 
