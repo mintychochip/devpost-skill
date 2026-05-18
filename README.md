@@ -6,7 +6,12 @@ CLI for Devpost hackathons.
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/mintychochip/devpost-skill/main/install.sh | bash
-# Windows: iwr https://raw.githubusercontent.com/mintychochip/devpost-skill/main/install.ps1 -useb | iex
+```
+
+Windows:
+
+```powershell
+iwr https://raw.githubusercontent.com/mintychochip/devpost-skill/main/install.ps1 -UseBasicParsing | iex
 ```
 
 ## Usage

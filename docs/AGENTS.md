@@ -13,42 +13,98 @@ playwright install chromium
 
 ---
 
+## Command Discovery
+
+**Every command has built-in help:**
+
+```bash
+devpost --help           # List all commands
+devpost <command> --help # Show command usage, flags, examples
+devpost search --help
+devpost team create --help
+```
+
+---
+
 ## Quick Reference
 
+### Hackathon Discovery
 | Command | Description | Key Flags |
 |---------|-------------|-----------|
 | `devpost hackathons` | List/browse hackathons | `--state`, `--sort`, `--query`, `--limit`, `--json` |
 | `devpost overview <slug>` | Hackathon details | `--json` |
+| `devpost details <slug>` | View sections (dates, prizes, etc.) | `--section`, `--json` |
+| `devpost get <slug>` | Get participants, winners, rules | `-t <type>`, `--json` |
 | `devpost evaluate <slug>` | Decision report (Enter/Maybe/Skip) | `--skills`, `--json` |
+| `devpost featured` | List featured hackathons | `--type`, `--json` |
+| `devpost recommended` | Recommended hackathons (needs auth) | `--json` |
+| `devpost nearby` | Nearby hackathons (needs auth) | `--json` |
+| `devpost themes` | List all themes | `--popular`, `--json` |
+| `devpost trending` | Trending tech tags | `--json` |
+| `devpost organizations` | Search organizations | `-q`, `--json` |
+
+### Project Discovery
+| Command | Description | Key Flags |
+|---------|-------------|-----------|
 | `devpost search <query>` | Global project search | `--playwright`, `--across`, `--limit`, `--json` |
 | `devpost gallery <slug>` | Project gallery | `--winners`, `--limit`, `--json` |
 | `devpost project <url>` | Project details | `--json` |
-| `devpost user <username>` | Full user profile | `--json` |
 | `devpost search-users <query>` | Search users | `--limit`, `--json` |
-| `devpost participants <slug>` | Hackathon participants | `--limit`, `--json` |
-| `devpost rules <slug>` | Structured rules | `--json` |
-| `devpost winners <slug>` | Winning projects | `--json` |
-| `devpost deadlines` | Hackathons by deadline | `--this-week`, `--today`, `--json` |
-| `devpost rss` | Hackathon feed | `--json` |
-| `devpost join <slug>` | Register for hackathon | (requires auth) |
-| `devpost submit project <slug>` | Submit project | `--title`, `--tagline`, `--dry-run` |
-| `devpost host create` | Create hackathon draft | `--config`, `--name`, `--start`, `--dry-run` |
-| `devpost host essentials <slug>` | Configure essentials | `--config`, `--tagline`, `--host`, `--themes` |
-| `devpost host eligibility <slug>` | Configure eligibility | `--config`, `--community`, `--max-team-size` |
-| `devpost host dates <slug>` | Configure dates | `--config`, `--submission-close` |
-| `devpost host description <slug>` | Configure description | `--config`, `--overview`, `--requirements` |
-| `devpost host rules <slug>` | Configure rules | `--config`, `--text` |
-| `devpost host judging <slug>` | Configure judging | `--mode`, `--criteria` |
-| `devpost host prizes <slug>` | Configure prizes | `--add "NAME,TYPE,AMOUNT"` |
-| `devpost host todos <slug>` | Configure to-dos | `--chat`, `--todo` |
-| `devpost host publish <slug>` | Publish hackathon | `--dry-run` |
-| `devpost host list` | List managed hackathons | `--json` |
-| `devpost host status <slug>` | Show config status | `--json` |
-| `devpost host init` | Generate config template | `--full` |
-| `devpost index build` | Build local search index | `--projects`, `--limit` |
-| `devpost index search <query>` | Search local index | `--type`, `--limit` |
+| `devpost user <username>` | Full user profile | `--json` |
+
+### Submission Management
+| Command | Description | Key Flags |
+|---------|-------------|-----------|
+| `devpost update <url>` | Update submission | `--title`, `--tagline`, `--github`, `--dry-run` |
+| `devpost delete <url>` | Delete submission | `--confirm` |
+| `devpost upload <url> <imgs...>` | Upload screenshots | `--set-main` |
+| `devpost links <url>` | Update links | `--github`, `--demo`, `--video`, `--dry-run` |
+| `devpost like <url>` | Like/bookmark project | — |
+| `devpost my-submissions` | List your submissions | `--limit`, `--json` |
+| `devpost submission <url>` | Submission details | `--json` |
+
+### Team Management
+| Command | Description | Key Flags |
+|---------|-------------|-----------|
+| `devpost team add <url> <user>` | Add team member | `--verbose` |
+| `devpost team create <slug>` | Create team | `-n`, `--invite`, `--invite-email` |
+| `devpost team join <slug>` | Join team | `-i <invite-url>` |
+| `devpost team remove <url> <user>` | Remove member | — |
+
+### Authentication & Registration
+| Command | Description | Key Flags |
+|---------|-------------|-----------|
+| `devpost auth login` | Login | `-m <method>`, `-e <email>` |
+| `devpost auth logout` | Logout | — |
+| `devpost auth status` | Check auth status | — |
+| `devpost join <slug>` | Join hackathon | — |
+| `devpost leave <slug>` | Leave hackathon | `--confirm` |
 
 **All commands support `--json` flag.** When stdout is not a TTY (piped), JSON is auto-detected.
+
+---
+
+## How to Discover Commands
+
+**Use `--help` for everything:**
+
+```bash
+# What commands exist?
+devpost --help
+
+# How do I use this command?
+devpost search --help
+devpost team create --help
+
+# What flags does it support?
+devpost hackathons --help
+```
+
+Each help output shows:
+- **Usage** - Required syntax and arguments
+- **Description** - What the command does
+- **Examples** - Real usage patterns
+- **Options** - All available flags with descriptions
 
 ---
 

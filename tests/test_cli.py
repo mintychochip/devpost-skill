@@ -144,33 +144,6 @@ class TestCLIAuthCommands:
 class TestCLISubmitCommands:
     """Test submission CLI commands."""
 
-    def test_submit_project_dry_run(self, monkeypatch):
-        """Test submit project with --dry-run."""
-        monkeypatch.setenv("DEVPOST_EMAIL", "test@example.com")
-        monkeypatch.setenv("DEVPOST_PASSWORD", "testpass")
-        
-        with patch("devpost_cli.core.AuthenticatedClient.submit_project") as mock_submit:
-            mock_submit.return_value = {
-                "success": True,
-                "dry_run": True,
-                "hackathon_slug": "test",
-                "project_title": "Test Project",
-            }
-            
-            runner = CliRunner()
-            result = runner.invoke(
-                cli,
-                [
-                    "submit", "project", "test-hackathon",
-                    "--title", "Test Project",
-                    "--tagline", "Test Tagline",
-                    "--dry-run",
-                ],
-            )
-            
-            assert result.exit_code == 0
-            assert "DRY RUN" in result.output
-
     def test_update_no_fields_error(self, monkeypatch):
         """Test update exits with error when no fields specified."""
         monkeypatch.setenv("DEVPOST_EMAIL", "test@example.com")

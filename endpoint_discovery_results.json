@@ -1,0 +1,431 @@
+{
+  "timestamp": "2026-05-18T09:59:28.471706",
+  "test_config": {
+    "hackathon_slug": "zervehack",
+    "username": "tech-dawg015",
+    "base_url": "https://devpost.com/api"
+  },
+  "summary": {
+    "total_tested": 41,
+    "working": 0,
+    "blocked": 0,
+    "not_found": 41,
+    "errors": 0,
+    "server_errors": 0,
+    "success_rate": 0.0,
+    "working_endpoints": [],
+    "blocked_endpoints": []
+  },
+  "all_results": [
+    {
+      "endpoint": "hackathon/hackathons/{slug}",
+      "url": "https://devpost.com/api/hackathons/zervehack",
+      "status_code": 404,
+      "response_time_ms": 324.74,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "hackathon/hackathons/{slug}/participants",
+      "url": "https://devpost.com/api/hackathons/zervehack/participants",
+      "status_code": 404,
+      "response_time_ms": 81.54,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "hackathon/hackathons/{slug}/projects",
+      "url": "https://devpost.com/api/hackathons/zervehack/projects",
+      "status_code": 404,
+      "response_time_ms": 80.73,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "hackathon/hackathons/{slug}/projects/gallery",
+      "url": "https://devpost.com/api/hackathons/zervehack/projects/gallery",
+      "status_code": 404,
+      "response_time_ms": 78.3,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "hackathon/hackathons/{slug}/winners",
+      "url": "https://devpost.com/api/hackathons/zervehack/winners",
+      "status_code": 404,
+      "response_time_ms": 81.06,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "hackathon/hackathons/{slug}/updates",
+      "url": "https://devpost.com/api/hackathons/zervehack/updates",
+      "status_code": 404,
+      "response_time_ms": 80.91,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "hackathon/hackathons/{slug}/forum_topics",
+      "url": "https://devpost.com/api/hackathons/zervehack/forum_topics",
+      "status_code": 404,
+      "response_time_ms": 190.06,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "hackathon/hackathons/{slug}/resources",
+      "url": "https://devpost.com/api/hackathons/zervehack/resources",
+      "status_code": 404,
+      "response_time_ms": 78.79,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "hackathon/hackathons/{slug}/rules",
+      "url": "https://devpost.com/api/hackathons/zervehack/rules",
+      "status_code": 404,
+      "response_time_ms": 78.19,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "hackathon/hackathons/{slug}/eligibility",
+      "url": "https://devpost.com/api/hackathons/zervehack/eligibility",
+      "status_code": 404,
+      "response_time_ms": 79.64,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "hackathon/hackathons/{slug}/prizes",
+      "url": "https://devpost.com/api/hackathons/zervehack/prizes",
+      "status_code": 404,
+      "response_time_ms": 78.69,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "hackathon/hackathons/{slug}/judging",
+      "url": "https://devpost.com/api/hackathons/zervehack/judging",
+      "status_code": 404,
+      "response_time_ms": 78.82,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "user/users/{username}",
+      "url": "https://devpost.com/api/users/tech-dawg015",
+      "status_code": 404,
+      "response_time_ms": 77.87,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "user/users/{username}/profile",
+      "url": "https://devpost.com/api/users/tech-dawg015/profile",
+      "status_code": 404,
+      "response_time_ms": 81.1,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "user/users/{username}/projects",
+      "url": "https://devpost.com/api/users/tech-dawg015/projects",
+      "status_code": 404,
+      "response_time_ms": 78.55,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "user/users/{username}/hackathons",
+      "url": "https://devpost.com/api/users/tech-dawg015/hackathons",
+      "status_code": 404,
+      "response_time_ms": 79.77,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "user/users/{username}/followers",
+      "url": "https://devpost.com/api/users/tech-dawg015/followers",
+      "status_code": 404,
+      "response_time_ms": 78.1,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "user/users/{username}/following",
+      "url": "https://devpost.com/api/users/tech-dawg015/following",
+      "status_code": 404,
+      "response_time_ms": 78.53,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "user/users/{username}/likes",
+      "url": "https://devpost.com/api/users/tech-dawg015/likes",
+      "status_code": 404,
+      "response_time_ms": 79.29,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "user/users/{username}/achievements",
+      "url": "https://devpost.com/api/users/tech-dawg015/achievements",
+      "status_code": 404,
+      "response_time_ms": 78.87,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "user/users/{username}/challenges",
+      "url": "https://devpost.com/api/users/tech-dawg015/challenges",
+      "status_code": 404,
+      "response_time_ms": 78.51,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "project/software/{id}",
+      "url": "https://devpost.com/api/software/123456",
+      "status_code": 404,
+      "response_time_ms": 78.01,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "project/projects/{id}",
+      "url": "https://devpost.com/api/projects/123456",
+      "status_code": 404,
+      "response_time_ms": 79.66,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "project/software/{id}/details",
+      "url": "https://devpost.com/api/software/123456/details",
+      "status_code": 404,
+      "response_time_ms": 78.94,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "project/software/{id}/comments",
+      "url": "https://devpost.com/api/software/123456/comments",
+      "status_code": 404,
+      "response_time_ms": 77.56,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "project/software/{id}/likes",
+      "url": "https://devpost.com/api/software/123456/likes",
+      "status_code": 404,
+      "response_time_ms": 77.6,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "project/software/{id}/team",
+      "url": "https://devpost.com/api/software/123456/team",
+      "status_code": 404,
+      "response_time_ms": 78.59,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "search/software/search",
+      "url": "https://devpost.com/api/software/search",
+      "status_code": 404,
+      "response_time_ms": 78.57,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "search/projects/search",
+      "url": "https://devpost.com/api/projects/search",
+      "status_code": 404,
+      "response_time_ms": 78.28,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "search/hackathons/search",
+      "url": "https://devpost.com/api/hackathons/search",
+      "status_code": 404,
+      "response_time_ms": 91.87,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "search/search/projects",
+      "url": "https://devpost.com/api/search/projects",
+      "status_code": 404,
+      "response_time_ms": 76.79,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "search/search/hackathons",
+      "url": "https://devpost.com/api/search/hackathons",
+      "status_code": 404,
+      "response_time_ms": 78.12,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "team/teams/{id}",
+      "url": "https://devpost.com/api/teams/123456",
+      "status_code": 404,
+      "response_time_ms": 78.12,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "team/teams/{id}/members",
+      "url": "https://devpost.com/api/teams/123456/members",
+      "status_code": 404,
+      "response_time_ms": 77.07,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "team/teams/{id}/projects",
+      "url": "https://devpost.com/api/teams/123456/projects",
+      "status_code": 404,
+      "response_time_ms": 79.2,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "team/teams/{id}/hackathon",
+      "url": "https://devpost.com/api/teams/123456/hackathon",
+      "status_code": 404,
+      "response_time_ms": 76.5,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "misc/featured/projects",
+      "url": "https://devpost.com/api/featured/projects",
+      "status_code": 404,
+      "response_time_ms": 78.27,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "misc/trending/projects",
+      "url": "https://devpost.com/api/trending/projects",
+      "status_code": 404,
+      "response_time_ms": 80.04,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "misc/popular/projects",
+      "url": "https://devpost.com/api/popular/projects",
+      "status_code": 404,
+      "response_time_ms": 78.16,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "misc/recent/projects",
+      "url": "https://devpost.com/api/recent/projects",
+      "status_code": 404,
+      "response_time_ms": 78.11,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    },
+    {
+      "endpoint": "misc/technologies/trending",
+      "url": "https://devpost.com/api/technologies/trending",
+      "status_code": 404,
+      "response_time_ms": 78.0,
+      "response_size": 1287,
+      "is_json": false,
+      "preview": "<!DOCTYPE html>\n<html lang=\"en\" class=\"no-js error-page error-404\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge,chrome=1\">\n    <meta name=\"viewport\" con",
+      "error": null
+    }
+  ]
+}

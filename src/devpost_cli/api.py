@@ -183,7 +183,7 @@ class DevpostAPI:
         Returns:
             Hackathon dict or None if not found
         """
-        result = await self.search_hackathons(url=slug, limit=1)
+        result = await self.search_hackathons(search=slug, limit=1)
         hackathons = result.get("hackathons", [])
         return hackathons[0] if hackathons else None
     
