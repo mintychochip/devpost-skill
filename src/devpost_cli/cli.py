@@ -1729,14 +1729,10 @@ def status():
     mgr = CacheManager()
     info = mgr.status()
 
-    console.print(Panel(
-        f"[green]Entries:[/green] {info['entries']}\n"
-        f"[green]Size:[/green] {_format_bytes(info['size_bytes'])}\n"
-        f"[green]Oldest:[/green] {info.get('oldest') or 'N/A'}\n"
-        f"[green]Newest:[/green] {info.get('newest') or 'N/A'}",
-        title="Cache Status",
-        border_style="blue",
-    ))
+    console.print(f"entries: {info['entries']}")
+    console.print(f"size: {_format_bytes(info['size_bytes'])}")
+    console.print(f"oldest: {info.get('oldest') or 'N/A'}")
+    console.print(f"newest: {info.get('newest') or 'N/A'}")
 
     if info["keys"]:
         console.print("\n[bold]Cached keys:[/bold]")
@@ -1842,31 +1838,19 @@ def submit_project_cmd(
             )
 
             if result.get("error"):
-                console.print(Panel(
-                    f"[red]Error:[/red] {result['error']}\n\n"
-                    f"[dim]Steps:[/dim] {json.dumps(result.get('steps', []), indent=2, default=str)}",
-                    title="Submission Failed",
-                    border_style="red"
-                ))
+                console.print(f"[red]Error:[/red] {result['error']}")
+                console.print(f"[dim]Steps:[/dim] {json.dumps(result.get('steps', []), indent=2, default=str)}")
                 sys.exit(1)
 
             if dry_run:
-                console.print(Panel(
-                    f"[yellow]DRY RUN - Would submit:[/yellow]\n\n"
-                    f"Hackathon: {result['hackathon_slug']}\n"
-                    f"Title: {result['project_title']}\n"
-                    f"Tagline: {tagline}",
-                    title="Submission Preview",
-                    border_style="yellow"
-                ))
+                console.print(f"[yellow]DRY RUN[/yellow]")
+                console.print(f"hackathon: {result['hackathon_slug']}")
+                console.print(f"title: {result['project_title']}")
+                console.print(f"tagline: {tagline}")
             else:
-                console.print(Panel(
-                    f"[green]Successfully submitted![/green]\n\n"
-                    f"URL: {result.get('url', 'N/A')}\n"
-                    f"Title: {result['project_title']}",
-                    title="Submission Complete",
-                    border_style="green"
-                ))
+                console.print(f"[green]Successfully submitted![/green]")
+                console.print(f"url: {result.get('url', 'N/A')}")
+                console.print(f"title: {result['project_title']}")
 
     _run_async(_submit())
 
@@ -1908,15 +1892,11 @@ def my_submissions(limit: int, is_json: Optional[bool]):
                 console.print("[yellow]No submissions found.[/yellow]")
                 return
 
-            table = Table(title="Your Devpost Submissions")
-            table.add_column("Title", style="cyan")
-            table.add_column("URL", style="dim")
-
+            console.print(f"[dim]({len(result['submissions'])} submissions)[/dim]")
             for p in result["submissions"]:
-                table.add_row(p.get("title", "Unknown"), p.get("url", "N/A")[:60])
-
-            console.print(table)
-            console.print(f"\n[dim]Showing {len(result['submissions'])} submissions[/dim]")
+                title = p.get("title", "Unknown")
+                url = p.get("url", "N/A")
+                console.print(f"{title}\t{url}")
 
     _run_async(_list())
 
@@ -1985,20 +1965,12 @@ def update(project_url: str, title: Optional[str], tagline: Optional[str], descr
                 sys.exit(1)
 
             if dry_run:
-                console.print(Panel(
-                    f"[yellow]DRY RUN - Would update:[/yellow]\n\n"
-                    f"Project: {result['url']}\n"
-                    f"Fields: {', '.join(result['updated_fields'])}",
-                    title="Update Preview",
-                    border_style="yellow"
-                ))
+                console.print(f"[yellow]DRY RUN[/yellow]")
+                console.print(f"project: {result['url']}")
+                console.print(f"fields: {', '.join(result['updated_fields'])}")
             else:
-                console.print(Panel(
-                    f"[green]Successfully updated![/green]\n\n"
-                    f"Updated fields: {', '.join(result['updated_fields'])}",
-                    title="Update Complete",
-                    border_style="green"
-                ))
+                console.print(f"[green]Successfully updated![/green]")
+                console.print(f"updated: {', '.join(result['updated_fields'])}")
 
     _run_async(_update())
 
@@ -2036,16 +2008,13 @@ def submission(project_url: str, is_json: Optional[bool]):
                 sys.exit(1)
 
             details = result.get("details", {})
-            console.print(Panel(
-                f"[bold cyan]{details.get('title', 'Unknown')}[/bold cyan]\n\n"
-                f"[green]Tagline:[/green] {details.get('tagline', 'N/A')}\n"
-                f"[green]Description:[/green] {details.get('description', 'N/A')[:200]}\n"
-                f"[green]Built with:[/green] {', '.join(details.get('built_with', [])) or 'N/A'}\n"
-                f"[green]Team:[/green] {', '.join([m['username'] for m in details.get('team_members', [])]) or 'Solo'}\n\n"
-                f"[green]URL:[/green] {result.get('url', 'N/A')}",
-                title="Submission Details",
-                border_style="cyan"
-            ))
+            console.print(f"[cyan]{details.get('title', 'Unknown')}[/cyan]")
+            console.print(f"tagline: {details.get('tagline', 'N/A')}")
+            console.print(f"description: {details.get('description', 'N/A')[:200]}")
+            console.print(f"built_with: {', '.join(details.get('built_with', [])) or 'N/A'}")
+            team_str = ', '.join([m['username'] for m in details.get('team_members', [])]) or 'Solo'
+            console.print(f"team: {team_str}")
+            console.print(f"url: {result.get('url', 'N/A')}")
 
     _run_async(_submission())
 
@@ -2084,13 +2053,9 @@ def team_add(project_url: str, username: str):
                 console.print(f"[red]Error: {result['error']}[/red]")
                 sys.exit(1)
 
-            console.print(Panel(
-                f"[green]{result['message']}[/green]\n\n"
-                f"Project: {project_url}\n"
-                f"User: {username}",
-                title="Team Member Added",
-                border_style="green"
-            ))
+            console.print(f"[green]{result['message']}[/green]")
+            console.print(f"project: {project_url}")
+            console.print(f"user: {username}")
 
     _run_async(_add())
 
@@ -2119,13 +2084,9 @@ def team_remove(project_url: str, username: str):
                 console.print(f"[red]Error: {result['error']}[/red]")
                 sys.exit(1)
 
-            console.print(Panel(
-                f"[green]{result['message']}[/green]\n\n"
-                f"Project: {project_url}\n"
-                f"User: {username}",
-                title="Team Member Removed",
-                border_style="green"
-            ))
+            console.print(f"[green]{result['message']}[/green]")
+            console.print(f"project: {project_url}")
+            console.print(f"user: {username}")
 
     _run_async(_remove())
 
@@ -2158,13 +2119,9 @@ def team_create(hackathon_slug: str, name: str, invite: Optional[str]):
                 console.print(f"[red]Error: {result['error']}[/red]")
                 sys.exit(1)
 
-            console.print(Panel(
-                f"[green]{result['message']}[/green]\n\n"
-                f"Hackathon: {hackathon_slug}\n"
-                f"Team: {name}",
-                title="Team Created",
-                border_style="green"
-            ))
+            console.print(f"[green]{result['message']}[/green]")
+            console.print(f"hackathon: {hackathon_slug}")
+            console.print(f"team: {name}")
 
     _run_async(_create())
 
@@ -2196,12 +2153,8 @@ def team_join(hackathon_slug: str, invite_url: Optional[str]):
                 console.print(f"[red]Error: {result['error']}[/red]")
                 sys.exit(1)
 
-            console.print(Panel(
-                f"[green]{result['message']}[/green]\n\n"
-                f"Hackathon: {hackathon_slug}",
-                title="Joined Team",
-                border_style="green"
-            ))
+            console.print(f"[green]{result['message']}[/green]")
+            console.print(f"hackathon: {hackathon_slug}")
 
     _run_async(_join())
 
@@ -2236,13 +2189,13 @@ def upload(project_url: str, image_paths: tuple[str], set_main: int):
                 sys.exit(1)
 
             if result.get("uploaded"):
-                console.print(Panel(
-                    f"[green]Uploaded {len(result['uploaded'])} images[/green]\n\n"
-                    + "\n".join([f"  ✓ {p}" for p in result["uploaded"]]) +
-                    (f"\n\n[yellow]Failed:[/yellow]\n" + "\n".join([f"  ✗ {f['path']}: {f['reason']}"] for f in result.get("failed", [])) if result.get("failed") else ""),
-                    title="Upload Complete",
-                    border_style="green"
-                ))
+                console.print(f"[green]Uploaded {len(result['uploaded'])} images[/green]")
+                for p in result["uploaded"]:
+                    console.print(f"  {p}")
+                if result.get("failed"):
+                    console.print(f"\n[yellow]Failed:[/yellow]")
+                    for f in result["failed"]:
+                        console.print(f"  {f['path']}: {f['reason']}")
 
     _run_async(_upload())
 
@@ -2272,25 +2225,17 @@ def delete(project_url: str, confirm: bool):
             result = await client.delete_submission(project_url, confirm)
 
             if not confirm:
-                console.print(Panel(
-                    f"[yellow]Confirmation required[/yellow]\n\n"
-                    f"{result.get('message', 'Confirmation required to delete this project.')}\n\n"
-                    f"Run with [bold]--confirm[/bold] to delete: devpost delete {project_url} --confirm",
-                    title="Delete Warning",
-                    border_style="yellow"
-                ))
+                console.print(f"[yellow]Confirmation required[/yellow]")
+                console.print(f"{result.get('message', 'Confirmation required to delete this project.')}")
+                console.print(f"\nRun with --confirm to delete: devpost delete {project_url} --confirm")
                 sys.exit(0)
 
             if result.get("error"):
                 console.print(f"[red]Error: {result['error']}[/red]")
                 sys.exit(1)
 
-            console.print(Panel(
-                f"[green]{result['message']}[/green]\n\n"
-                f"Project: {project_url}",
-                title="Project Deleted",
-                border_style="green"
-            ))
+            console.print(f"[green]{result['message']}[/green]")
+            console.print(f"project: {project_url}")
 
     _run_async(_delete())
 
@@ -2321,12 +2266,8 @@ def join(hackathon_slug: str):
                 console.print(f"[red]Error: {result['error']}[/red]")
                 sys.exit(1)
 
-            console.print(Panel(
-                f"[green]{result['data']['message']}[/green]\n\n"
-                f"Hackathon: {hackathon_slug}",
-                title="Joined Hackathon",
-                border_style="green"
-            ))
+            console.print(f"[green]{result['data']['message']}[/green]")
+            console.print(f"hackathon: {hackathon_slug}")
 
     _run_async(_join())
 
@@ -2355,25 +2296,17 @@ def leave(hackathon_slug: str, confirm: bool):
             result = await client.leave_hackathon(hackathon_slug, confirm)
 
             if not confirm:
-                console.print(Panel(
-                    f"[yellow]Confirmation required[/yellow]\n\n"
-                    f"{result.get('error', 'Confirmation required to leave this hackathon.')}\n\n"
-                    f"Run with [bold]--confirm[/bold] to leave: devpost leave {hackathon_slug} --confirm",
-                    title="Leave Warning",
-                    border_style="yellow"
-                ))
+                console.print(f"[yellow]Confirmation required[/yellow]")
+                console.print(f"{result.get('error', 'Confirmation required to leave this hackathon.')}")
+                console.print(f"\nRun with --confirm to leave: devpost leave {hackathon_slug} --confirm")
                 return
 
             if result.get("error"):
                 console.print(f"[red]Error: {result['error']}[/red]")
                 sys.exit(1)
 
-            console.print(Panel(
-                f"[green]{result['data']['message']}[/green]\n\n"
-                f"Hackathon: {hackathon_slug}",
-                title="Left Hackathon",
-                border_style="green"
-            ))
+            console.print(f"[green]{result['data']['message']}[/green]")
+            console.print(f"hackathon: {hackathon_slug}")
 
     _run_async(_leave())
 
@@ -2401,12 +2334,8 @@ def like(project_url: str):
                 console.print(f"[red]Error: {result['error']}[/red]")
                 sys.exit(1)
 
-            console.print(Panel(
-                f"[green]{result['data']['message']}[/green]\n\n"
-                f"Project: {project_url}",
-                title="Project Liked",
-                border_style="green"
-            ))
+            console.print(f"[green]{result['data']['message']}[/green]")
+            console.print(f"project: {project_url}")
 
     _run_async(_like())
 
@@ -2466,19 +2395,13 @@ def links(project_url: str, github: Optional[str], demo: Optional[str],
                 sys.exit(1)
 
             if dry_run:
-                console.print(Panel(
-                    f"[yellow]DRY RUN - Would update links:[/yellow]\n\n"
-                    + "\n".join([f"  {k}: {v}" for k, v in link_updates.items()]),
-                    title="Links Update Preview",
-                    border_style="yellow"
-                ))
+                console.print(f"[yellow]DRY RUN[/yellow]")
+                for k, v in link_updates.items():
+                    console.print(f"  {k}: {v}")
             else:
-                console.print(Panel(
-                    f"[green]Links updated successfully![/green]\n\n"
-                    + "\n".join([f"  {k}: {v}" for k, v in link_updates.items()]),
-                    title="Links Updated",
-                    border_style="green"
-                ))
+                console.print(f"[green]Links updated[/green]")
+                for k, v in link_updates.items():
+                    console.print(f"  {k}: {v}")
 
     _run_async(_links())
 
@@ -2558,22 +2481,14 @@ def _do_login(email: Optional[str], password: Optional[str]) -> None:
         if result.get("success"):
             if output_json({"success": True, "email": email, "message": "Credentials saved to ~/.devpost/.env"}, None):
                 return
-            console.print(Panel(
-                f"[green]Successfully authenticated![/green]\n\n"
-                f"Email: {email}\n\n"
-                f"[dim]Credentials saved to ~/.devpost/.env[/dim]",
-                title="Authentication Successful",
-                border_style="green"
-            ))
+            console.print(f"[green]Successfully authenticated![/green]")
+            console.print(f"email: {email}")
+            console.print(f"[dim]Credentials saved to ~/.devpost/.env[/dim]")
         else:
             error_msg = result.get('error', 'Unknown error')
             if output_json({"success": False, "error": error_msg}, None):
                 sys.exit(2)
-            console.print(Panel(
-                f"[red]Authentication failed:[/red] {error_msg}",
-                title="Authentication Failed",
-                border_style="red"
-            ))
+            console.print(f"[red]Authentication failed:[/red] {error_msg}")
             sys.exit(2)
 
     _run_async(_login())
@@ -2585,11 +2500,7 @@ def _do_logout() -> None:
         result = await clear_credentials()
         if output_json(result, None):
             return
-        console.print(Panel(
-            f"[green]{result['message']}[/green]",
-            title="Logged Out",
-            border_style="green"
-        ))
+        console.print(f"[green]{result['message']}[/green]")
 
     _run_async(_logout())
 
