@@ -1291,6 +1291,582 @@ class DevpostClient:
 
         return result
 
+    async def get_rss(self) -> dict[str, Any]:
+        """Get hackathons RSS feed from /api/hackathons.rss.
+        
+        Note: This endpoint returns JSON (not RSS XML as the name suggests).
+        """
+        cache_key = "rss_hackathons"
+        if self._cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, */*",
+        }
+
+        try:
+            resp = await self._request_with_retry(
+                "GET",
+                f"{API_BASE}/hackathons.rss",
+                headers=headers,
+            )
+            data = resp.json()
+            
+            hackathons = data.get("hackathons", [])
+            
+            result = {
+                "success": True,
+                "channel": "Devpost Hackathons",
+                "items": hackathons,
+                "count": len(hackathons),
+            }
+
+            if self._cache:
+                self._cache.set(cache_key, result, ttl=600)
+
+            return result
+        except DevpostError as e:
+            return {
+                "success": False,
+                "error": e.message,
+                "code": e.code,
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "code": "ERROR",
+            }
+
+    async def get_user_full(self, username: str) -> dict[str, Any]:
+        """Get complete user profile including achievements, followers, following, and likes.
+        
+        Uses a single Playwright browser session to fetch all 5 pages sequentially.
+        Returns a composite dict with all user data.
+        """
+        cache_key = f"user_full_{username}"
+        if self._cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            return {
+                "error": "Playwright not installed. Install with: pip install playwright && playwright install chromium",
+                "code": "DEPENDENCY_MISSING",
+            }
+
+        result = {
+            "success": False,
+            "username": username,
+            "steps": [],
+            "data": {
+                "name": None,
+                "bio": None,
+                "location": None,
+                "skills": [],
+                "links": {},
+                "projects": [],
+                "project_count": 0,
+                "hackathons": [],
+                "hackathon_count": 0,
+                "achievements": [],
+                "achievement_count": 0,
+                "followers": [],
+                "follower_count": 0,
+                "following": [],
+                "following_count": 0,
+                "likes": [],
+                "like_count": 0,
+            }
+        }
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=not self.headed)
+            page = await browser.new_page()
+
+            try:
+                user_url = f"{BASE_URL}/users/{username}"
+                result["steps"].append(f"Loading {user_url}")
+                await page.goto(user_url, timeout=30000)
+                await page.wait_for_load_state("networkidle")
+                await asyncio.sleep(2)
+
+                data = result["data"]
+
+                # Check if page is 404
+                if "404" in await page.title():
+                    result["error"] = f"User '{username}' not found"
+                    result["code"] = "NOT_FOUND"
+                    return result
+
+                # === Extract profile data ===
+                try:
+                    name = await page.wait_for_selector("h1", timeout=5000)
+                    raw_name = await name.text_content()
+                    data["name"] = " ".join(raw_name.split())
+                except Exception:
+                    logger.debug("Could not extract user name")
+
+                try:
+                    bio = await page.query_selector(".bio, .about, .description, p")
+                    if bio:
+                        data["bio"] = (await bio.text_content()).strip()
+                except Exception:
+                    logger.debug("Could not extract bio")
+
+                try:
+                    skills = []
+                    skill_elems = await page.query_selector_all(".skill, .tag, .pill")
+                    for skill in skill_elems[:20]:
+                        text = await skill.text_content()
+                        if text and len(text) < 50:
+                            skills.append(text.strip())
+                    if skills:
+                        data["skills"] = skills
+                except Exception:
+                    logger.debug("Could not extract skills")
+
+                # Extract projects (H5 headings with parent links)
+                try:
+                    projects = []
+                    seen_titles = set()
+                    h5_elements = await page.query_selector_all("h5")
+                    
+                    for h5 in h5_elements[:20]:
+                        title = await h5.text_content()
+                        title = title.strip() if title else ""
+                        
+                        if not title or len(title) < 3 or len(title) > 100:
+                            continue
+                        if title.lower() in ['back', 'view all', 'software', 'projects', 'connect']:
+                            continue
+                        if title in seen_titles:
+                            continue
+                        
+                        seen_titles.add(title)
+                        parent = await h5.query_selector("xpath=../..")
+                        project_info = {"title": title}
+                        
+                        if parent:
+                            proj_link = await parent.query_selector("a[href*='/software/']")
+                            if proj_link:
+                                href = await proj_link.get_attribute("href")
+                                if href and '/built-with/' not in href:
+                                    project_info["url"] = f"{BASE_URL}{href}" if href.startswith('/') else href
+                            
+                            hack_link = await parent.query_selector("a[href*='.devpost.com']:not([href*='/users/']):not([href*='/software/'])")
+                            if hack_link:
+                                hack_text = await hack_link.text_content()
+                                hack_href = await hack_link.get_attribute("href")
+                                if hack_text and hack_href and len(hack_text) < 60:
+                                    hack_text = hack_text.strip()
+                                    if hack_text.lower() not in ['log in', 'sign up', 'about', 'careers', 'contact', 'help', 'blog']:
+                                        if 'info.devpost.com' not in hack_href and 'help.devpost.com' not in hack_href:
+                                            project_info["hackathon"] = hack_text
+                                            project_info["hackathon_url"] = hack_href
+                            
+                            stats_elem = await parent.query_selector(".counts, .stats")
+                            if stats_elem:
+                                stats_text = await stats_elem.text_content()
+                                if stats_text:
+                                    project_info["stats"] = stats_text.strip()
+                        
+                        projects.append(project_info)
+                    
+                    data["projects"] = projects
+                    data["project_count"] = len(projects)
+                except Exception as e:
+                    logger.debug("Could not extract projects: %s", e)
+
+                # Extract hackathons from /challenges tab
+                try:
+                    hackathons = []
+                    nav_link = await page.query_selector("a[href*='/challenges']")
+                    if nav_link:
+                        count_elem = await nav_link.query_selector(".totals span")
+                        if count_elem:
+                            count_text = await count_elem.text_content()
+                            if count_text:
+                                data["hackathon_count"] = int(count_text.strip())
+                    
+                    challenges_url = f"{BASE_URL}/{username}/challenges"
+                    result["steps"].append(f"Loading {challenges_url}")
+                    await page.goto(challenges_url, timeout=30000)
+                    await page.wait_for_load_state("networkidle")
+                    await asyncio.sleep(2)
+                    
+                    all_links = await page.query_selector_all("a[href*='.devpost.com']")
+                    seen_hackathons = set()
+                    seen_urls = set()
+                    
+                    for link in all_links[:50]:
+                        hack_href = await link.get_attribute("href")
+                        if not hack_href:
+                            continue
+                        if '/users/' in hack_href or '/hackathons' in hack_href:
+                            continue
+                        if 'info.devpost.com' in hack_href or 'help.devpost.com' in hack_href or 'secure.devpost.com' in hack_href:
+                            continue
+                        if '.devpost.com/' not in hack_href:
+                            continue
+                        
+                        match = re.search(r'https?://([a-z0-9-]+)\.devpost\.com', hack_href)
+                        if match:
+                            hack_subdomain = match.group(1)
+                            if hack_subdomain in ['devpost', 'info', 'help', 'secure', 'api', 'www']:
+                                continue
+                            
+                            if hack_href not in seen_urls:
+                                seen_urls.add(hack_href)
+                                hack_text = await link.text_content()
+                                if hack_text:
+                                    hack_text = hack_text.strip().split('\n')[0].strip()[:50]
+                                
+                                hackathons.append({
+                                    "name": hack_text or hack_subdomain,
+                                    "url": hack_href,
+                                })
+                    
+                    data["hackathons"] = hackathons
+                    if not data.get("hackathon_count"):
+                        data["hackathon_count"] = len(hackathons)
+                    
+                    result["steps"].append(f"Returning to profile")
+                    await page.goto(user_url, timeout=30000)
+                    await page.wait_for_load_state("networkidle")
+                except Exception as e:
+                    logger.debug("Could not extract hackathons: %s", e)
+                    try:
+                        await page.goto(user_url, timeout=10000)
+                    except:
+                        pass
+
+                # Extract location
+                try:
+                    location = await page.query_selector(".location, .location-icon + *")
+                    if location:
+                        data["location"] = await location.text_content()
+                except Exception:
+                    logger.debug("Could not extract location")
+
+                # Extract social links - scope to profile header area only
+                links = {}
+                try:
+                    # Look for social links in the profile header/portfolio area, not site-wide
+                    profile_header = await page.query_selector(".portfolio-header, .user-profile, #profile-header")
+                    search_context = profile_header if profile_header else page
+                    
+                    github = await search_context.query_selector("a[href*='github.com']")
+                    if github:
+                        links["github"] = await github.get_attribute("href")
+                    
+                    twitter = await search_context.query_selector("a[href*='twitter.com'], a[href*='x.com']")
+                    if twitter:
+                        href = await twitter.get_attribute("href")
+                        if href and "devpost" not in href:
+                            links["twitter"] = href
+                    
+                    linkedin = await search_context.query_selector("a[href*='linkedin.com']")
+                    if linkedin:
+                        href = await linkedin.get_attribute("href")
+                        if href and "devpost" not in href:
+                            links["linkedin"] = href
+                    
+                    website = await search_context.query_selector("a.website-link, a[rel='me']")
+                    if website:
+                        href = await website.get_attribute("href")
+                        if href and "devpost.com" not in href:
+                            links["website"] = href
+                except Exception:
+                    logger.debug("Could not extract social links")
+                if links:
+                    data["links"] = links
+
+                # === Extract achievements ===
+                try:
+                    achievements_url = f"{BASE_URL}/{username}/achievements"
+                    result["steps"].append(f"Loading {achievements_url}")
+                    await page.goto(achievements_url, timeout=30000)
+                    await page.wait_for_load_state("networkidle")
+                    await asyncio.sleep(3)
+
+                    achievements = []
+                    nav_link = await page.query_selector("a[href*='/achievements']")
+                    if nav_link:
+                        count_elem = await nav_link.query_selector(".totals span")
+                        if count_elem:
+                            count_text = await count_elem.text_content()
+                            if count_text:
+                                data["achievement_count"] = int(count_text.strip())
+
+                    achievement_cards = await page.query_selector_all("div.content")
+                    for card in achievement_cards[:50]:
+                        achievement_info = {}
+                        
+                        title_elem = await card.query_selector("h5")
+                        if title_elem:
+                            title = await title_elem.text_content()
+                            if title:
+                                achievement_info["title"] = " ".join(title.split()).strip()
+                        
+                        desc_elems = await card.query_selector_all("p")
+                        for p_elem in desc_elems:
+                            p_class = await p_elem.get_attribute("class") or ""
+                            if "progression" not in p_class:
+                                p_text = await p_elem.text_content()
+                                if p_text:
+                                    achievement_info["description"] = " ".join(p_text.split()).strip()
+                                    break
+                        
+                        date_elem = await card.query_selector("small.achieved-at, small.faded")
+                        if date_elem:
+                            date_text = await date_elem.text_content()
+                            if date_text:
+                                achievement_info["earned"] = " ".join(date_text.split()).strip()
+                        
+                        parent = await card.query_selector("xpath=..")
+                        if parent:
+                            img_elem = await parent.query_selector("img")
+                            if img_elem:
+                                img_src = await img_elem.get_attribute("src")
+                                if img_src:
+                                    achievement_info["badge_url"] = img_src if img_src.startswith("http") else f"{BASE_URL}{img_src}"
+                        
+                        if achievement_info.get("title"):
+                            achievements.append(achievement_info)
+                    
+                    data["achievements"] = achievements
+                    if not data["achievement_count"]:
+                        data["achievement_count"] = len(achievements)
+                except Exception as e:
+                    logger.debug("Could not extract achievements: %s", e)
+
+                # === Extract followers ===
+                try:
+                    followers_url = f"{BASE_URL}/{username}/followers"
+                    result["steps"].append(f"Loading {followers_url}")
+                    await page.goto(followers_url, timeout=30000)
+                    await page.wait_for_load_state("networkidle")
+                    await asyncio.sleep(2)
+
+                    followers = []
+                    nav_link = await page.query_selector("a[href*='/followers']")
+                    if nav_link:
+                        count_elem = await nav_link.query_selector(".totals span")
+                        if count_elem:
+                            count_text = await count_elem.text_content()
+                            if count_text:
+                                data["follower_count"] = int(count_text.strip())
+
+                    followers = await page.evaluate('''() => {
+                        const items = document.querySelectorAll('.gallery-item');
+                        const results = [];
+                        items.forEach((item, idx) => {
+                            const link = item.querySelector('a.user-profile-link, a[href*="/users/"], a[href^="https://devpost.com/"]');
+                            
+                            let username = null;
+                            let url = null;
+                            if (link) {
+                                const href = link.getAttribute('href');
+                                url = href;
+                                const match = href.match(/devpost\\.com\\/([^\\/]+)/);
+                                if (match && match[1] !== 'users') {
+                                    username = match[1];
+                                }
+                            }
+                            
+                            const nameDiv = item.querySelector('.entry-body');
+                            let name = null;
+                            let bio = null;
+                            if (nameDiv) {
+                                const texts = nameDiv.textContent.trim().split('\\n').filter(t => t.trim());
+                                if (texts.length > 0) {
+                                    name = texts[0].trim();
+                                    if (name === 'Follow' || name === 'Following') name = null;
+                                }
+                                if (texts.length > 1) {
+                                    bio = texts[1].trim();
+                                    if (bio === 'Follow' || bio === 'Following' || bio.length < 5) bio = null;
+                                }
+                            }
+                            
+                            if (username || (name && name !== 'Follow')) {
+                                results.push({
+                                    username: username,
+                                    name: name,
+                                    url: url ? (url.startsWith('http') ? url : 'https://devpost.com' + url) : null,
+                                    bio: bio
+                                });
+                            }
+                        });
+                        return results;
+                    }''')
+                    
+                    data["followers"] = followers
+                    if not data["follower_count"]:
+                        data["follower_count"] = len(followers)
+                except Exception as e:
+                    logger.debug("Could not extract followers: %s", e)
+
+                # === Extract following ===
+                try:
+                    following_url = f"{BASE_URL}/{username}/following"
+                    result["steps"].append(f"Loading {following_url}")
+                    await page.goto(following_url, timeout=30000)
+                    await page.wait_for_load_state("networkidle")
+                    await asyncio.sleep(2)
+
+                    following = []
+                    nav_link = await page.query_selector("a[href*='/following']")
+                    if nav_link:
+                        count_elem = await nav_link.query_selector(".totals span")
+                        if count_elem:
+                            count_text = await count_elem.text_content()
+                            if count_text:
+                                data["following_count"] = int(count_text.strip())
+
+                    following = await page.evaluate('''() => {
+                        const items = document.querySelectorAll('.gallery-item');
+                        const results = [];
+                        items.forEach((item, idx) => {
+                            const link = item.querySelector('a.user-profile-link, a[href*="/users/"], a[href^="https://devpost.com/"]');
+                            
+                            let username = null;
+                            let url = null;
+                            if (link) {
+                                const href = link.getAttribute('href');
+                                url = href;
+                                const match = href.match(/devpost\\.com\\/([^\\/]+)/);
+                                if (match && match[1] !== 'users') {
+                                    username = match[1];
+                                }
+                            }
+                            
+                            const nameDiv = item.querySelector('.entry-body');
+                            let name = null;
+                            let bio = null;
+                            if (nameDiv) {
+                                const texts = nameDiv.textContent.trim().split('\\n').filter(t => t.trim());
+                                if (texts.length > 0) {
+                                    name = texts[0].trim();
+                                    if (name === 'Follow' || name === 'Following') name = null;
+                                }
+                                if (texts.length > 1) {
+                                    bio = texts[1].trim();
+                                    if (bio === 'Follow' || bio === 'Following' || bio.length < 5) bio = null;
+                                }
+                            }
+                            
+                            if (username || (name && name !== 'Follow')) {
+                                results.push({
+                                    username: username,
+                                    name: name,
+                                    url: url ? (url.startsWith('http') ? url : 'https://devpost.com' + url) : null,
+                                    bio: bio
+                                });
+                            }
+                        });
+                        return results;
+                    }''')
+                    
+                    data["following"] = following
+                    if not data["following_count"]:
+                        data["following_count"] = len(following)
+                except Exception as e:
+                    logger.debug("Could not extract following: %s", e)
+
+                # === Extract likes ===
+                try:
+                    likes_url = f"{BASE_URL}/{username}/likes"
+                    result["steps"].append(f"Loading {likes_url}")
+                    await page.goto(likes_url, timeout=30000)
+                    await page.wait_for_load_state("networkidle")
+                    await asyncio.sleep(2)
+
+                    likes = []
+                    nav_link = await page.query_selector("a[href*='/likes']")
+                    if nav_link:
+                        count_elem = await nav_link.query_selector(".totals span")
+                        if count_elem:
+                            count_text = await count_elem.text_content()
+                            if count_text:
+                                data["like_count"] = int(count_text.strip())
+
+                    likes = await page.evaluate('''() => {
+                        const items = document.querySelectorAll('.gallery-item');
+                        const results = [];
+                        items.forEach(item => {
+                            const link = item.querySelector('a[href*="/software/"]');
+                            
+                            let url = null;
+                            let title = null;
+                            let tagline = null;
+                            let hackathon = null;
+                            
+                            if (link) {
+                                const href = link.getAttribute('href');
+                                url = href.startsWith('http') ? href : 'https://devpost.com' + href;
+                                
+                                const titleElem = item.querySelector('h5, .title');
+                                if (titleElem) {
+                                    title = titleElem.textContent.trim();
+                                } else {
+                                    const linkText = link.textContent.trim().split('\\n')[0].trim();
+                                    if (linkText && linkText.length < 80) {
+                                        title = linkText;
+                                    }
+                                }
+                                
+                                const taglineElem = item.querySelector('.tagline');
+                                if (taglineElem) {
+                                    const taglineText = taglineElem.textContent.trim();
+                                    tagline = taglineText.substring(0, 200);
+                                }
+                                
+                                const hackathonElem = item.querySelector('.hackathon, .challenge-name');
+                                if (hackathonElem) {
+                                    hackathon = hackathonElem.textContent.trim();
+                                }
+                            }
+                            
+                            if (title || url) {
+                                results.push({
+                                    title: title,
+                                    url: url,
+                                    tagline: tagline,
+                                    hackathon: hackathon
+                                });
+                            }
+                        });
+                        return results;
+                    }''')
+                    
+                    data["likes"] = likes
+                    if not data["like_count"]:
+                        data["like_count"] = len(likes)
+                except Exception as e:
+                    logger.debug("Could not extract likes: %s", e)
+
+                result["success"] = True
+                result["steps"].append("Successfully extracted full user profile")
+
+            except Exception as e:
+                result["error"] = str(e)
+                result["steps"].append(f"Error: {e}")
+            finally:
+                await browser.close()
+
+        if result["success"] and self._cache:
+            self._cache.set(cache_key, result, ttl=3600)
+
+        return result
+
     async def get_user_achievements(self, username: str) -> dict[str, Any]:
         """Get user achievements/badges using Playwright (JS-rendered page)."""
         cache_key = f"user_achievements_{username}"

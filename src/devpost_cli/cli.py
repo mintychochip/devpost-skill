@@ -60,7 +60,7 @@ def _run_async(coro):
 
 
 @click.group()
-@click.version_option(version="0.5.0", prog_name="devpost")
+@click.version_option(version="0.6.0", prog_name="devpost")
 @click.option("--headed", is_flag=True, help="Run browser in headed mode (visible window) for debugging")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
 def cli(headed: bool, verbose: bool):
@@ -548,31 +548,29 @@ def project(url: str, is_json: Optional[bool]):
 @cli.command()
 @click.argument("username")
 @click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
-@click.option("--verbose", "-v", is_flag=True, help="Show full project list and hackathon participations")
-def user(username: str, is_json: Optional[bool], verbose: bool):
-    """Get user profile info.
+def user(username: str, is_json: Optional[bool]):
+    """Get complete user profile.
     
-    Uses browser automation to extract name, bio, skills, projects,
-    hackathon participations, location, and social links from the user's profile.
+    Fetches all user data in one command: profile, projects, hackathons,
+    achievements, followers, following, and likes.
     
     \b
     Examples:
       devpost user tech-dawg015
-      devpost user alexrchen --json
-      devpost user mintychochip --verbose  # Show all projects and hackathons
+      devpost user mintychochip --json
     """
     async def _user():
         async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
-            profile = await client.get_user_profile(username)
+            result = await client.get_user_full(username)
 
-            if output_json(profile, is_json):
+            if output_json(result, is_json):
                 return
 
-            if not profile.get("success"):
-                console.print(f"[red]Error: {profile.get('error', 'Unknown error')}[/red]")
+            if not result.get("success"):
+                console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/red]")
                 sys.exit(1)
 
-            data = profile.get("data", {})
+            data = result.get("data", {})
             
             console.print(f"[cyan]{data.get('name', username)}[/cyan]")
             console.print(f"username: {username}")
@@ -587,228 +585,77 @@ def user(username: str, is_json: Optional[bool], verbose: bool):
             if data.get("skills"):
                 console.print(f"skills: {', '.join(data['skills'][:10])}")
             
-            projects = data.get("projects", [])
-            console.print(f"projects: {len(projects)}")
-            if verbose and projects:
-                for p in projects:
-                    title = p.get('title', 'Unknown')
-                    console.print(f"  {title}")
-                    if p.get('hackathon'):
-                        console.print(f"    [dim]from {p['hackathon']}[/dim]")
-            
-            hackathons = data.get("hackathons", [])
-            console.print(f"hackathons: {len(hackathons)}")
-            if verbose and hackathons:
-                for h in hackathons[:15]:
-                    name = h.get('name', 'Unknown')
-                    url = h.get('url', '')
-                    console.print(f"  {name}")
-                    console.print(f"    [dim]{url}[/dim]")
-                if len(hackathons) > 15:
-                    console.print(f"  [dim]... and {len(hackathons) - 15} more[/dim]")
-            
             if data.get("links"):
                 for k, v in data["links"].items():
                     console.print(f"{k}: {v}")
+            
+            projects = data.get("projects", [])
+            console.print(f"\nprojects: {data.get('project_count', len(projects))}")
+            for p in projects[:5]:
+                title = p.get('title', 'Unknown')
+                console.print(f"  {title}")
+                if p.get('hackathon'):
+                    console.print(f"    [dim]from {p['hackathon']}[/dim]")
+            if len(projects) > 5:
+                console.print(f"  [dim]... and {len(projects) - 5} more[/dim]")
+            
+            hackathons = data.get("hackathons", [])
+            console.print(f"\nhackathons: {data.get('hackathon_count', len(hackathons))}")
+            for h in hackathons[:5]:
+                name = h.get('name', 'Unknown')
+                url = h.get('url', '')
+                console.print(f"  {name}")
+                console.print(f"    [dim]{url}[/dim]")
+            if len(hackathons) > 5:
+                console.print(f"  [dim]... and {len(hackathons) - 5} more[/dim]")
+            
+            achievements = data.get("achievements", [])
+            console.print(f"\nachievements: {data.get('achievement_count', len(achievements))}")
+            for a in achievements[:5]:
+                title = a.get('title', 'Unknown')
+                console.print(f"  {title}")
+                if a.get('earned'):
+                    console.print(f"    [dim]earned: {a['earned']}[/dim]")
+            if len(achievements) > 5:
+                console.print(f"  [dim]... and {len(achievements) - 5} more[/dim]")
+            
+            followers = data.get("followers", [])
+            console.print(f"\nfollowers: {data.get('follower_count', len(followers))}")
+            for f in followers[:5]:
+                name = f.get('name') or f.get('username', 'Unknown')
+                console.print(f"  {name}")
+                if f.get('bio'):
+                    console.print(f"    [dim]{f['bio'][:100]}[/dim]")
+            if len(followers) > 5:
+                console.print(f"  [dim]... and {len(followers) - 5} more[/dim]")
+            
+            following = data.get("following", [])
+            console.print(f"\nfollowing: {data.get('following_count', len(following))}")
+            for f in following[:5]:
+                name = f.get('name') or f.get('username', 'Unknown')
+                console.print(f"  {name}")
+                if f.get('bio'):
+                    console.print(f"    [dim]{f['bio'][:100]}[/dim]")
+            if len(following) > 5:
+                console.print(f"  [dim]... and {len(following) - 5} more[/dim]")
+            
+            likes = data.get("likes", [])
+            console.print(f"\nlikes: {data.get('like_count', len(likes))}")
+            for p in likes[:5]:
+                title = p.get('title', 'Unknown')
+                console.print(f"  {title}")
+                if p.get('tagline'):
+                    console.print(f"    [dim]{p['tagline'][:100]}[/dim]")
+            if len(likes) > 5:
+                console.print(f"  [dim]... and {len(likes) - 5} more[/dim]")
 
     _run_async(_user())
 
 
-@cli.command()
-@click.argument("username")
-@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
-@click.option("--verbose", "-v", is_flag=True, help="Show full achievement details with descriptions")
-def achievements(username: str, is_json: Optional[bool], verbose: bool):
-    """Get user achievements/badges.
-    
-    Uses browser automation to extract achievement badges, medals, and awards
-    from the user's achievements page.
-    
-    \b
-    Examples:
-      devpost achievements tech-dawg015
-      devpost achievements mintychochip --json
-      devpost achievements alexrchen --verbose
-    """
-    async def _achievements():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
-            result = await client.get_user_achievements(username)
-
-            if output_json(result, is_json):
-                return
-
-            if not result.get("success"):
-                console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/red]")
-                sys.exit(1)
-
-            data = result.get("data", {})
-            achievements_list = data.get("achievements", [])
-            total_count = data.get("total_count", len(achievements_list))
-            
-            console.print(f"[cyan]{username}[/cyan]")
-            console.print(f"achievements_page: {BASE_URL}/{username}/achievements")
-            console.print(f"total: {total_count}")
-            
-            if achievements_list:
-                for a in achievements_list[:20]:
-                    title = a.get('title', 'Unknown')
-                    console.print(f"  {title}")
-                    
-                    if verbose:
-                        if a.get('description'):
-                            console.print(f"    [dim]{a['description'][:200]}[/dim]")
-                        if a.get('earned'):
-                            console.print(f"    earned: {a['earned']}")
-                
-                if len(achievements_list) > 20:
-                    console.print(f"  [dim]... and {len(achievements_list) - 20} more[/dim]")
-            else:
-                console.print("[dim]No achievements found.[/dim]")
-
-    _run_async(_achievements())
 
 
-@cli.command()
-@click.argument("username")
-@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
-def followers(username: str, is_json: Optional[bool]):
-    """Get list of users following this user.
-    
-    Uses browser automation to extract follower cards from the user's followers page.
-    
-    \b
-    Examples:
-      devpost followers tech-dawg015
-      devpost followers mintychochip --json
-    """
-    async def _followers():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
-            result = await client.get_user_followers(username)
-
-            if output_json(result, is_json):
-                return
-
-            if not result.get("success"):
-                console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/red]")
-                sys.exit(1)
-
-            data = result.get("data", {})
-            followers_list = data.get("followers", [])
-            total_count = data.get("total_count", len(followers_list))
-            
-            console.print(f"[cyan]{username}[/cyan]")
-            console.print(f"followers_page: {BASE_URL}/{username}/followers")
-            console.print(f"total: {total_count}")
-            
-            if followers_list:
-                for f in followers_list[:20]:
-                    name = f.get('name') or f.get('username', 'Unknown')
-                    console.print(f"  {name}")
-                    if f.get('bio'):
-                        console.print(f"    [dim]{f['bio'][:100]}[/dim]")
-                
-                if len(followers_list) > 20:
-                    console.print(f"  [dim]... and {len(followers_list) - 20} more[/dim]")
-            else:
-                console.print("[dim]No followers found.[/dim]")
-
-    _run_async(_followers())
 
 
-@cli.command()
-@click.argument("username")
-@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
-def following(username: str, is_json: Optional[bool]):
-    """Get list of users this user is following.
-    
-    Uses browser automation to extract following cards from the user's following page.
-    
-    \b
-    Examples:
-      devpost following tech-dawg015
-      devpost following mintychochip --json
-    """
-    async def _following():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
-            result = await client.get_user_following(username)
-
-            if output_json(result, is_json):
-                return
-
-            if not result.get("success"):
-                console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/red]")
-                sys.exit(1)
-
-            data = result.get("data", {})
-            following_list = data.get("following", [])
-            total_count = data.get("total_count", len(following_list))
-            
-            console.print(f"[cyan]{username}[/cyan]")
-            console.print(f"following_page: {BASE_URL}/{username}/following")
-            console.print(f"total: {total_count}")
-            
-            if following_list:
-                for f in following_list[:20]:
-                    name = f.get('name') or f.get('username', 'Unknown')
-                    console.print(f"  {name}")
-                    if f.get('bio'):
-                        console.print(f"    [dim]{f['bio'][:100]}[/dim]")
-                
-                if len(following_list) > 20:
-                    console.print(f"  [dim]... and {len(following_list) - 20} more[/dim]")
-            else:
-                console.print("[dim]Not following anyone.[/dim]")
-
-    _run_async(_following())
-
-
-@cli.command()
-@click.argument("username")
-@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
-def likes(username: str, is_json: Optional[bool]):
-    """Get list of projects this user has liked.
-    
-    Uses browser automation to extract liked projects from the user's likes page.
-    
-    \b
-    Examples:
-      devpost likes tech-dawg015
-      devpost likes mintychochip --json
-    """
-    async def _likes():
-        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
-            result = await client.get_user_likes(username)
-
-            if output_json(result, is_json):
-                return
-
-            if not result.get("success"):
-                console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/red]")
-                sys.exit(1)
-
-            data = result.get("data", {})
-            likes_list = data.get("likes", [])
-            total_count = data.get("total_count", len(likes_list))
-            
-            console.print(f"[cyan]{username}[/cyan]")
-            console.print(f"likes_page: {BASE_URL}/{username}/likes")
-            console.print(f"total: {total_count}")
-            
-            if likes_list:
-                for p in likes_list[:20]:
-                    title = p.get('title', 'Unknown')
-                    console.print(f"  {title}")
-                    if p.get('tagline'):
-                        console.print(f"    [dim]{p['tagline'][:100]}[/dim]")
-                    if p.get('hackathon'):
-                        console.print(f"    [dim]from {p['hackathon']}[/dim]")
-                
-                if len(likes_list) > 20:
-                    console.print(f"  [dim]... and {len(likes_list) - 20} more[/dim]")
-            else:
-                console.print("[dim]No liked projects yet.[/dim]")
-
-    _run_async(_likes())
 
 
 @cli.command()
@@ -816,7 +663,7 @@ def likes(username: str, is_json: Optional[bool]):
 def rss(is_json: Optional[bool]):
     """Get hackathons RSS feed.
     
-    Fetches the RSS feed from /hackathons.rss with proper headers.
+    Fetches from /api/hackathons.rss (returns JSON, not RSS XML).
     Useful for monitoring new hackathons or deadline changes.
     
     \b
@@ -825,57 +672,36 @@ def rss(is_json: Optional[bool]):
       devpost rss --json
     """
     async def _rss():
-        import httpx
-        
-        # Note: /api/hackathons.rss returns JSON, not RSS XML
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json, */*",
-        }
-        
-        async with httpx.AsyncClient(headers=headers, follow_redirects=True) as client:
-            try:
-                resp = await client.get(f"{API_BASE}/hackathons.rss")
-                resp.raise_for_status()
-                data = resp.json()
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            result = await client.get_rss()
+
+            if output_json(result, is_json):
+                return
+
+            if not result.get("success"):
+                console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/red]")
+                sys.exit(1)
+
+            hackathons = result.get("items", [])
+            
+            console.print(f"[cyan]Devpost Hackathons[/cyan]")
+            console.print(f"count: {result['count']}")
+            console.print("")
+
+            for h in hackathons[:15]:
+                title = h.get('title', 'Untitled')
+                url = h.get('url', '')
+                prize = h.get('prize_amount', '')
+                ends = h.get('time_left_to_submission', '')
                 
-                hackathons = data.get("hackathons", [])
-                
-                result = {
-                    "success": True,
-                    "channel": "Devpost Hackathons",
-                    "items": hackathons,
-                    "count": len(hackathons),
-                }
-                
-                if output_json(result, is_json):
-                    return
-                
-                console.print(f"[cyan]Devpost Hackathons[/cyan]")
-                console.print(f"count: {result['count']}")
+                console.print(f"[bold]{title}[/bold]")
+                if url:
+                    console.print(f"  {url}")
+                if prize:
+                    console.print(f"  [green]Prize:[/green] {prize}")
+                if ends:
+                    console.print(f"  [yellow]Ends:[/yellow] {ends}")
                 console.print("")
-                
-                for h in hackathons[:15]:
-                    title = h.get('title', 'Untitled')
-                    url = h.get('url', '')
-                    prize = h.get('prize_amount', '')
-                    ends = h.get('time_left_to_submission', '')
-                    
-                    console.print(f"[bold]{title}[/bold]")
-                    if url:
-                        console.print(f"  {url}")
-                    if prize:
-                        console.print(f"  [green]Prize:[/green] {prize}")
-                    if ends:
-                        console.print(f"  [yellow]Ends:[/yellow] {ends}")
-                    console.print("")
-                
-            except httpx.HTTPStatusError as e:
-                console.print(f"[red]Error fetching feed: {e}[/red]")
-                sys.exit(1)
-            except Exception as e:
-                console.print(f"[red]Error: {e}[/red]")
-                sys.exit(1)
 
     _run_async(_rss())
 
