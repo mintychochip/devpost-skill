@@ -512,6 +512,137 @@ class DevpostClient:
 
         return result
 
+    async def list_all_hackathons(
+        self,
+        open_state: Optional[str] = None,
+        order_by: str = "recently-added",
+        search: Optional[str] = None,
+        challenge_type: Optional[list[str]] = None,
+        length: Optional[list[str]] = None,
+        themes: Optional[list[str]] = None,
+        organization: Optional[str] = None,
+        open_to: Optional[list[str]] = None,
+        managed_by_devpost_badge: bool = False,
+        eligibility: bool = False,
+        per_page: int = 50,
+        max_pages: Optional[int] = None,
+    ) -> list[dict]:
+        """Fetch ALL hackathons with auto-pagination.
+        
+        Automatically paginates through all results up to max_pages.
+        Useful for building a complete local index or comprehensive search.
+        
+        Args:
+            open_state: Filter by state (open, upcoming, ended)
+            order_by: Sort order
+            search: Search query
+            challenge_type: Filter by type (online, in-person)
+            length: Filter by duration (days, weeks, months)
+            themes: Filter by themes
+            organization: Filter by organization
+            open_to: Filter by access (public, invite_only)
+            managed_by_devpost_badge: Only Devpost-managed
+            eligibility: Only hackathons user is eligible for (requires auth)
+            per_page: Results per page (max 50)
+            max_pages: Max pages to fetch (None = fetch all)
+        
+        Returns:
+            List of all hackathon dicts
+        """
+        all_hackathons = []
+        page = 1
+        
+        while True:
+            result = await self.list_hackathons(
+                limit=per_page,
+                open_state=open_state,
+                order_by=order_by,
+                search=search,
+                challenge_type=challenge_type,
+                length=length,
+                themes=themes,
+                organization=organization,
+                open_to=open_to,
+                managed_by_devpost_badge=managed_by_devpost_badge,
+                eligibility=eligibility,
+                page=page,
+                per_page=per_page,
+            )
+            
+            hackathons = result.get("hackathons", [])
+            if not hackathons:
+                break
+            
+            all_hackathons.extend(hackathons)
+            
+            meta = result.get("meta", {})
+            total_count = meta.get("total_count", 0)
+            total_pages = meta.get("total_pages", 0)
+            
+            if len(hackathons) < per_page:
+                break
+            
+            if max_pages and page >= max_pages:
+                break
+            
+            if page >= total_pages:
+                break
+            
+            page += 1
+            await asyncio.sleep(0.5)
+        
+        return all_hackathons
+
+    async def search_users(
+        self,
+        query: str,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Search for users on Devpost.
+        
+        Uses participant lists from hackathons to discover users.
+        For detailed user info, use get_user_full(username).
+        
+        Args:
+            query: Search query (matches username or name)
+            limit: Max users to return
+        
+        Returns:
+            List of user dicts with username, name, url
+        """
+        if not query:
+            return []
+        
+        q = query.lower()
+        found_users = {}
+        
+        hackathons = await self.list_hackathons(limit=10, open_state="open")
+        
+        for h in hackathons.get("hackathons", []):
+            if len(found_users) >= limit:
+                break
+            
+            slug = h.get("url", "").rstrip("/").split("/")[-1]
+            if not slug:
+                continue
+            
+            try:
+                participants = await self.get_participants(slug, limit=50)
+                for p in participants.get("participants", []):
+                    username = p.get("username", "").lower()
+                    name = p.get("name", "").lower()
+                    
+                    if q in username or q in name:
+                        key = p.get("username", "")
+                        if key and key not in found_users:
+                            found_users[key] = p
+            except Exception:
+                continue
+            
+            await asyncio.sleep(0.3)
+        
+        return list(found_users.values())[:limit]
+
     async def get_hackathon_by_slug(self, slug: str) -> Optional[dict]:
         """Get hackathon by URL slug."""
         validate_slug(slug)
@@ -2797,23 +2928,118 @@ class DevpostClient:
 
         return result
 
+    async def search_projects_across_hackathons(
+        self,
+        query: str,
+        hackathon_states: list[str] = ["open"],
+        limit: int = 50,
+        max_hackathons: int = 20,
+    ) -> list[dict]:
+        """Search for projects across multiple hackathons.
+        
+        Fetches project galleries from multiple hackathons and filters locally.
+        Useful for finding projects matching a keyword across all open/upcoming hackathons.
+        
+        Args:
+            query: Search query (matches project title, tagline, or tech stack)
+            hackathon_states: List of states to include (open, upcoming, ended)
+            limit: Max projects to return
+            max_hackathons: Max hackathons to search
+        
+        Returns:
+            List of matching projects with hackathon info
+        """
+        q = query.lower()
+        all_matches = []
+        seen_urls = set()
+        
+        for state in hackathon_states:
+            if len(all_matches) >= limit:
+                break
+            
+            hackathons = await self.list_hackathons(limit=max_hackathons, open_state=state)
+            
+            for h in hackathons.get("hackathons", []):
+                if len(all_matches) >= limit:
+                    break
+                
+                hackathon_url = h.get("url", "")
+                if not hackathon_url:
+                    continue
+                
+                try:
+                    projects_data = await self.list_hackathon_projects(
+                        hackathon_url=hackathon_url,
+                        limit=100,
+                        winners_only=False,
+                    )
+                    
+                    for proj in projects_data.get("projects", []):
+                        if proj.get("url") in seen_urls:
+                            continue
+                        
+                        title = (proj.get("title") or "").lower()
+                        tagline = (proj.get("tagline") or "").lower()
+                        tech_stack = ", ".join(proj.get("built_with", []) or []).lower()
+                        
+                        if q in title or q in tagline or q in tech_stack:
+                            seen_urls.add(proj.get("url"))
+                            proj["hackathon"] = {
+                                "name": h.get("title"),
+                                "slug": h.get("url", "").rstrip("/").split("/")[-1],
+                                "url": hackathon_url,
+                                "prize_amount": h.get("prize_amount"),
+                            }
+                            all_matches.append(proj)
+                    
+                    await asyncio.sleep(0.3)
+                    
+                except Exception:
+                    continue
+        
+        return all_matches[:limit]
+
     async def search_projects(
         self,
         query: str,
         limit: int = 20,
         order_by: Optional[str] = None,
+        use_playwright: bool = False,
     ) -> list[dict]:
         """Search projects via /software/search.
         
-        Note: This endpoint is protected by AWS WAF and may return empty results.
-        For reliable project search, use the gallery command within a specific hackathon.
+        Args:
+            query: Search query (supports operators: is:winner, is:featured, has:video, has:image, @username, at:"hackathon", #tech)
+            limit: Max projects to return
+            order_by: Sort order - "newest", "popular", or "trending"
+            use_playwright: If True, use browser automation to bypass WAF (slower but reliable)
+        
+        Note: HTTP-based search is protected by AWS WAF and may fail. Set use_playwright=True
+        for reliable search at the cost of speed.
         """
         cache_key = make_search_projects_key(query, limit, order_by)
-        if self._cache:
+        if self._cache and not use_playwright:
             cached = self._cache.get(cache_key)
             if cached is not None:
                 return cached
 
+        if use_playwright:
+            projects = await self._search_projects_playwright(query, limit, order_by)
+        else:
+            projects = await self._search_projects_http(query, limit, order_by)
+
+        projects = projects[:limit]
+        if self._cache and not use_playwright:
+            self._cache.set(cache_key, projects)
+        return projects
+
+    async def _search_projects_http(
+        self,
+        query: str,
+        limit: int = 20,
+        order_by: Optional[str] = None,
+    ) -> list[dict]:
+        """Search projects via HTTP request (fast but may be WAF-blocked)."""
         projects = []
         page = 1
         max_pages = (limit + 23) // 24
@@ -2831,7 +3057,6 @@ class DevpostClient:
                     params=params,
                 )
                 
-                # Check for AWS WAF block (returns 202 with challenge page)
                 if resp.status_code == 202 or "awsWafCookieDomainList" in resp.text or "gokuProps" in resp.text:
                     waf_detected = True
                     break
@@ -2873,15 +3098,107 @@ class DevpostClient:
         if waf_detected:
             raise DevpostError(
                 "Project search is blocked by AWS WAF. "
-                "Use 'devpost gallery <hackathon>' to search within a specific hackathon, "
-                "or use 'devpost projects search/popular/built-with/featured' for project browsing.",
+                "Use use_playwright=True or 'devpost gallery <hackathon>' for specific hackathons.",
                 code="WAF_BLOCKED",
             )
 
-        projects = projects[:limit]
-        if self._cache:
-            self._cache.set(cache_key, projects)
         return projects
+
+    async def _search_projects_playwright(
+        self,
+        query: str,
+        limit: int = 20,
+        order_by: Optional[str] = None,
+    ) -> list[dict]:
+        """Search projects using Playwright browser automation (bypasses WAF)."""
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            raise DevpostError(
+                "Playwright not installed. Install with: pip install playwright && playwright install chromium",
+                code="DEPENDENCY_MISSING",
+            )
+
+        result = []
+        
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=not self.headed)
+            page = await browser.new_page()
+
+            try:
+                search_url = f"{BASE_URL}/software/search"
+                params = {"query": query}
+                if order_by and order_by != "newest":
+                    params["order_by"] = order_by
+                
+                from urllib.parse import urlencode
+                full_url = f"{search_url}?{urlencode(params)}"
+                
+                await page.goto(full_url, wait_until="networkidle", timeout=30000)
+                await asyncio.sleep(2)
+
+                while len(result) < limit:
+                    projects = await page.evaluate('''() => {
+                        const items = document.querySelectorAll('.software-entry, .project-item, .gallery-item, article');
+                        const results = [];
+                        items.forEach(item => {
+                            const link = item.querySelector('a[href*="/software/"]');
+                            if (!link) return;
+                            
+                            const href = link.getAttribute('href');
+                            const titleElem = item.querySelector('h2, h3, h4, h5, .title');
+                            const taglineElem = item.querySelector('.tagline, .description, .summary');
+                            const winnerBadge = item.querySelector('.winner, .winner-badge, .prize-winner');
+                            const builtWithElem = item.querySelector('.built-with, .tech-stack');
+                            
+                            let title = '';
+                            if (titleElem) title = titleElem.textContent.trim();
+                            else title = link.textContent.trim().split('\\n')[0].trim();
+                            
+                            let tagline = '';
+                            if (taglineElem) tagline = taglineElem.textContent.trim().substring(0, 200);
+                            
+                            let built_with = [];
+                            if (builtWithElem) {
+                                const techText = builtWithElem.textContent;
+                                built_with = techText.split(',').map(t => t.trim()).filter(t => t);
+                            }
+                            
+                            results.push({
+                                title: title || 'Unknown',
+                                url: href.startsWith('http') ? href : 'https://devpost.com' + href,
+                                tagline: tagline,
+                                is_winner: !!winnerBadge,
+                                built_with: built_with,
+                            });
+                        });
+                        return results;
+                    }''')
+
+                    if not projects:
+                        break
+
+                    for p in projects:
+                        if p not in result:
+                            result.append(p)
+                    
+                    if len(result) >= limit:
+                        break
+
+                    next_btn = await page.query_selector('a[rel="next"], .pagination a[href*="page="]:not(.disabled)')
+                    if not next_btn:
+                        break
+                    
+                    await next_btn.click()
+                    await page.wait_for_load_state("networkidle")
+                    await asyncio.sleep(1)
+
+            except Exception as e:
+                logger.debug("Playwright search error: %s", e)
+            finally:
+                await browser.close()
+
+        return result
 
     async def get_popular_projects(self, limit: int = 20) -> list[dict]:
         """Get popular projects from /software/popular."""

@@ -912,6 +912,8 @@ def evaluate(slug: str, skills: Optional[str], is_json: Optional[bool], no_cache
 @click.option("--tech", is_flag=True, help="In-hackathon: search only tech stacks")
 @click.option("--include-rules", is_flag=True, help="In-hackathon: also search hackathon description and rules")
 @click.option("--no-cache", is_flag=True, help="Bypass cache, fetch fresh data")
+@click.option("--playwright", is_flag=True, help="Use browser automation (bypasses WAF, slower but reliable)")
+@click.option("--across", is_flag=True, help="Search across multiple hackathons (not just global search)")
 @click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
 def search(
     query: str,
@@ -928,21 +930,22 @@ def search(
     tech: bool,
     include_rules: bool,
     no_cache: bool,
+    playwright: bool,
+    across: bool,
     is_json: Optional[bool],
 ):
-    """Search projects on Devpost (matches /software/search).
-    
-    With --in flag, searches within a specific hackathon's projects.
+    """Search projects on Devpost.
     
     \b
-    Global project search:
-      devpost search "AI"                          # Search projects
+    Global project search (all Devpost):
+      devpost search "AI"                          # Search all projects
       devpost search "chatbot" -l 30               # More results
       devpost search "AI" --sort popular           # Sort by popularity
+      devpost search "AI" --playwright             # Use browser (bypasses WAF)
       devpost search "AI" --winner --has-video     # Winners with video
     
     \b
-    Advanced operators (can also type directly in query):
+    Advanced operators (type directly in query):
       is:winner, is:featured, has:video, has:image
       @username, at:"hackathon name", #python
     
@@ -951,6 +954,10 @@ def search(
       devpost search "RAG" --in medo               # Search projects in MeDo
       devpost search "agent" --in medo --winners   # Only winners
       devpost search "OpenAI" --in medo --tech     # Search tech stacks
+    
+    \b
+    Cross-hackathon search:
+      devpost search "AI" --across                 # Search across open hackathons
     
     For hackathon search, use: devpost hackathons --query "AI"
     """
@@ -961,11 +968,59 @@ def search(
             query, hackathon, winners, tech, include_rules,
             use_cache, is_json,
         )
+    elif across:
+        _search_projects_across(
+            query, limit, use_cache, playwright, is_json,
+        )
     else:
         _search_projects_global(
             query, limit, sort, winner, featured, has_video, has_image,
-            by_user, at_hackathon, use_cache, is_json,
+            by_user, at_hackathon, use_cache, playwright, is_json,
         )
+
+
+def _search_projects_across(
+    query: str,
+    limit: int,
+    use_cache: bool,
+    playwright: bool,
+    is_json: Optional[bool],
+):
+    """Search projects across multiple hackathons."""
+    async def _run():
+        async with DevpostClient(headed=_cli_config.get("headed", False), use_cache=use_cache) as client:
+            projects = await client.search_projects_across_hackathons(
+                query=query,
+                hackathon_states=["open", "upcoming"],
+                limit=limit,
+                max_hackathons=20,
+            )
+
+            if output_json(projects, is_json):
+                return
+
+            if not projects:
+                console.print(f"[yellow]No projects found for '{query}' across hackathons[/yellow]")
+                return
+
+            console.print(f"[green]Found {len(projects)} projects for '{query}' across hackathons:[/green]\n")
+
+            for p in projects:
+                title = p.get('title', 'Unknown')
+                tagline = p.get('tagline') or ''
+                winner_badge = " [yellow]★ WINNER[/yellow]" if p.get("is_winner") else ""
+                hackathon = p.get("hackathon", {})
+                hack_name = hackathon.get("name", "Unknown")
+                console.print(f"[cyan]{title}{winner_badge}[/cyan]")
+                if tagline:
+                    console.print(f"  [dim]{tagline[:100]}[/dim]")
+                if p.get("built_with"):
+                    console.print(f"  [dim]Built with: {', '.join(p['built_with'][:5])}[/dim]")
+                console.print(f"  [dim]Hackathon: {hack_name}[/dim]")
+                console.print(f"  [dim]{p.get('url', '')}[/dim]")
+                console.print("")
+
+    _run_async(_run())
 
 
 def _search_projects_global(
@@ -979,6 +1034,7 @@ def _search_projects_global(
     by_user: Optional[str],
     at_hackathon: Optional[str],
     use_cache: bool,
+    playwright: bool,
     is_json: Optional[bool],
 ):
     async def _run():
@@ -1002,7 +1058,12 @@ def _search_projects_global(
             full_query = f"{query} {' '.join(operators)}"
 
         async with DevpostClient(headed=_cli_config.get("headed", False), use_cache=use_cache) as client:
-            projects = await client.search_projects(query=full_query, limit=limit, order_by=sort if sort != "newest" else None)
+            projects = await client.search_projects(
+                query=full_query,
+                limit=limit,
+                order_by=sort if sort != "newest" else None,
+                use_playwright=playwright,
+            )
 
             if output_json(projects, is_json):
                 return
@@ -1129,6 +1190,223 @@ def participants(slug: str, limit: int, is_json: Optional[bool]):
                 console.print(f"{username}\t{name}\t{url}")
 
     _run_async(_participants())
+
+
+@cli.command()
+@click.argument("query")
+@click.option("--limit", "-l", default=20, help="Number of results (default: 20)")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
+def search_users(query: str, limit: int, is_json: Optional[bool]):
+    """Search for users on Devpost.
+    
+    Searches usernames and names from hackathon participant lists.
+    For detailed user info, use: devpost user <username>
+    
+    \b
+    Examples:
+      devpost search-users "john"              # Search for users named john
+      devpost search-users "python" -l 30      # Find Python developers
+      devpost search-users "AI" --json
+    """
+    async def _search():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            users = await client.search_users(query=query, limit=limit)
+
+            if output_json(users, is_json):
+                return
+
+            if not users:
+                console.print(f"[yellow]No users found for '{query}'[/yellow]")
+                return
+
+            console.print(f"[green]Found {len(users)} users for '{query}':[/green]\n")
+
+            for u in users:
+                username = u.get('username', 'Unknown')
+                name = u.get('name', '')
+                url = u.get('url', '')
+                console.print(f"[cyan]{username}[/cyan]")
+                if name and name != username:
+                    console.print(f"  [dim]{name}[/dim]")
+                console.print(f"  [dim]{url}[/dim]")
+                console.print("")
+
+    _run_async(_search())
+
+
+@cli.group()
+def index():
+    """Manage local search index.
+    
+    The search index enables fast offline full-text search across
+    cached hackathons, projects, and users.
+    
+    \b
+    Examples:
+      devpost index build                      # Build index from cache
+      devpost index search "AI"                # Search indexed data
+      devpost index stats                      # Show index statistics
+      devpost index clear                      # Clear index
+    """
+    pass
+
+
+@index.command()
+@click.option("--hackathons", is_flag=True, help="Index hackathons")
+@click.option("--projects", is_flag=True, help="Index projects from open hackathons")
+@click.option("--limit", "-l", default=100, help="Max items to index (default: 100)")
+def build(hackathons: bool, projects: bool, limit: int):
+    """Build or update the local search index.
+    
+    Indexes cached data for fast offline search.
+    By default, indexes hackathons only. Use --projects to also index projects.
+    
+    \b
+    Examples:
+      devpost index build                      # Index hackathons
+      devpost index build --projects           # Index hackathons + projects
+      devpost index build -l 500               # Index more items
+    """
+    from .search_index import SearchIndex
+    
+    async def _build():
+        idx = SearchIndex()
+        idx.load()
+        
+        console.print("[dim]Building search index...[/dim]")
+        
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            if hackathons or not projects:
+                console.print("[dim]Fetching hackathons...[/dim]")
+                hackathons_list = await client.list_all_hackathons(
+                    per_page=50,
+                    max_pages=(limit // 50) + 1,
+                )
+                count = idx.bulk_index_hackathons(hackathons_list)
+                console.print(f"[green]Indexed {count} hackathons[/green]")
+            
+            if projects:
+                console.print("[dim]Fetching projects from open hackathons...[/dim]")
+                hackathons_list = await client.list_hackathons(limit=20, open_state="open")
+                total_projects = 0
+                for h in hackathons_list.get("hackathons", []):
+                    slug = h.get("url", "").rstrip("/").split("/")[-1]
+                    if not slug:
+                        continue
+                    
+                    try:
+                        projects_data = await client.list_hackathon_projects(
+                            hackathon_url=h.get("url", ""),
+                            limit=50,
+                        )
+                        count = idx.bulk_index_projects(
+                            projects_data.get("projects", []),
+                            hackathon_slug=slug,
+                        )
+                        total_projects += count
+                    except Exception:
+                        continue
+                
+                console.print(f"[green]Indexed {total_projects} projects[/green]")
+        
+        idx.save()
+        stats = idx.get_stats()
+        console.print(f"\n[d]Index stats:[/dim]")
+        console.print(f"  hackathons: {stats['hackathon_count']}")
+        console.print(f"  projects: {stats['project_count']}")
+        console.print(f"  users: {stats['user_count']}")
+
+    _run_async(_build())
+
+
+@index.command()
+@click.argument("query")
+@click.option("--type", "-t", type=click.Choice(["all", "hackathons", "projects", "users"]), default="all")
+@click.option("--limit", "-l", default=20, help="Number of results (default: 20)")
+def search(query: str, type: str, limit: int):
+    """Search the local index.
+    
+    Fast offline full-text search across indexed data.
+    
+    \b
+    Examples:
+      devpost index search "AI"                # Search all types
+      devpost index search "python" -t projects  # Search projects only
+      devpost index search "hackathon" -t hackathons
+    """
+    from .search_index import SearchIndex
+    
+    idx = SearchIndex()
+    if not idx.load():
+        console.print("[yellow]Index not found. Run 'devpost index build' first.[/yellow]")
+        return
+    
+    if type in ("all", "hackathons"):
+        results = idx.search_hackathons(query, limit=limit)
+        if results:
+            console.print(f"[green]Hackathons ({len(results)}):[/green]")
+            for r in results:
+                console.print(f"  [cyan]{r.get('title', 'Unknown')}[/cyan]")
+                console.print(f"    [dim]{r.get('url', '')}[/dim]")
+    
+    if type in ("all", "projects"):
+        results = idx.search_projects(query, limit=limit)
+        if results:
+            console.print(f"\n[green]Projects ({len(results)}):[/green]")
+            for r in results:
+                console.print(f"  [cyan]{r.get('title', 'Unknown')}[/cyan]")
+                if r.get('tagline'):
+                    console.print(f"    [dim]{r['tagline'][:100]}[/dim]")
+                console.print(f"    [dim]{r.get('url', '')}[/dim]")
+    
+    if type in ("all", "users"):
+        results = idx.search_users(query, limit=limit)
+        if results:
+            console.print(f"\n[green]Users ({len(results)}):[/green]")
+            for r in results:
+                console.print(f"  [cyan]{r.get('username', 'Unknown')}[/cyan]")
+                if r.get('name'):
+                    console.print(f"    [dim]{r['name']}[/dim]")
+                console.print(f"    [dim]{r.get('url', '')}[/dim]")
+
+
+@index.command()
+def stats():
+    """Show index statistics."""
+    from .search_index import SearchIndex
+    
+    idx = SearchIndex()
+    if not idx.load():
+        console.print("[yellow]Index not found. Run 'devpost index build' first.[/yellow]")
+        return
+    
+    s = idx.get_stats()
+    console.print("Index Statistics:")
+    console.print(f"  hackathons: {s['hackathon_count']}")
+    console.print(f"  projects: {s['project_count']}")
+    console.print(f"  users: {s['user_count']}")
+    console.print(f"  created: {s.get('created_at') or 'N/A'}")
+    console.print(f"  updated: {s.get('updated_at') or 'N/A'}")
+
+
+@index.command(name="clear")
+@click.option("--confirm", is_flag=True, help="Confirm deletion")
+def index_clear(confirm: bool):
+    """Clear the search index.
+    
+    \b
+    Examples:
+      devpost index clear --confirm            # Clear index
+    """
+    from .search_index import SearchIndex
+    
+    if not confirm:
+        console.print("[yellow]Confirmation required. Use --confirm flag.[/yellow]")
+        return
+    
+    idx = SearchIndex()
+    idx.clear()
+    console.print("[green]Index cleared.[/green]")
 
 
 @cli.command()

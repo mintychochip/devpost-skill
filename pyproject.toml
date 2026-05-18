@@ -1,7 +1,7 @@
 [project]
 name = "devpost-cli"
-version = "0.6.0"
-description = "CLI for browsing, searching, and submitting to Devpost hackathons"
+version = "0.7.0"
+description = "Agentic Devpost toolkit — search hackathons, scout projects, find users, build local search index"
 dependencies = [
     "click>=8.0.0",
     "httpx>=0.27.0",
