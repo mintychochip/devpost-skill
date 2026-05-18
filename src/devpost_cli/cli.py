@@ -60,7 +60,7 @@ def _run_async(coro):
 
 
 @click.group()
-@click.version_option(version="0.4.0", prog_name="devpost")
+@click.version_option(version="0.5.0", prog_name="devpost")
 @click.option("--headed", is_flag=True, help="Run browser in headed mode (visible window) for debugging")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
 def cli(headed: bool, verbose: bool):

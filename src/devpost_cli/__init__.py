@@ -1,3 +1,3 @@
 """Devpost CLI - Browse, scout, and submit to hackathons."""
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
