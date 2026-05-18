@@ -280,24 +280,19 @@ class TestDevpostClient:
 
     @pytest.mark.asyncio
     async def test_list_hackathons_closed_alias(self):
-        """Test that --state closed maps to ended and pages through API."""
+        """Test that --state closed maps to status[]=ended in API call."""
         ended_hackathon = {
             "title": "Ended Hack",
             "url": "https://ended.devpost.com/",
             "open_state": "ended",
             "prize_amount": "$5,000",
         }
-        open_hackathon = {
-            "title": "Open Hack",
-            "url": "https://open.devpost.com/",
-            "open_state": "open",
-        }
 
         def side_effect(request):
-            page = int(request.url.params.get("page", "1"))
-            if page == 18:
-                return Response(200, json={"hackathons": [ended_hackathon]})
-            return Response(200, json={"hackathons": [open_hackathon]})
+            # Verify that status[]=ended is passed to the API
+            status_params = request.url.params.get_list("status[]")
+            assert "ended" in status_params, f"Expected status[]=ended, got {status_params}"
+            return Response(200, json={"hackathons": [ended_hackathon]})
 
         with respx.mock:
             respx.get("https://devpost.com/api/hackathons").mock(side_effect=side_effect)

@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: devpost-cli
-Version: 0.1.0
+Version: 0.4.0
 Summary: CLI for browsing, searching, and submitting to Devpost hackathons
 Requires-Dist: click>=8.0.0
 Requires-Dist: httpx>=0.27.0

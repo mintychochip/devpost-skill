@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 import sys
 from typing import Any, Optional
 
@@ -85,7 +86,7 @@ def cli(headed: bool, verbose: bool):
 
 @cli.command(name="hackathons")
 @click.option("--limit", "-l", default=20, help="Number of hackathons to show (default: 20)")
-@click.option("--state", "-s", type=click.Choice(["open", "closed", "ended", "upcoming", "judging", "submitting"]),
+@click.option("--state", "-s", type=click.Choice(["open", "closed", "ended", "upcoming"]),
               help="Filter by hackathon state ('closed' is an alias for 'ended')")
 @click.option("--sort", type=click.Choice(["most-relevant", "deadline", "recently-added", "prize-amount"]),
               default="most-relevant", help="Sort order (default: most-relevant)")
@@ -96,6 +97,7 @@ def cli(headed: bool, verbose: bool):
 @click.option("--organization", help="Organization name")
 @click.option("--access", type=click.Choice(["public", "invite-only"]), multiple=True, help="Access type (repeatable)")
 @click.option("--devpost-managed", is_flag=True, help="Only Devpost-managed hackathons")
+@click.option("--featured", is_flag=True, help="Only featured hackathons")
 @click.option("--page", type=int, default=1, help="Page number")
 @click.option("--per-page", type=int, default=9, help="Results per page")
 @click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
@@ -110,6 +112,7 @@ def hackathons(
     organization: Optional[str],
     access: tuple[str],
     devpost_managed: bool,
+    featured: bool,
     page: int,
     per_page: int,
     is_json: Optional[bool],
@@ -138,7 +141,7 @@ def hackathons(
                 length=list(duration) if duration else None,
                 themes=list(theme) if theme else None,
                 organization=organization,
-                open_to=list(access) if access else None,
+                open_to=[a.replace("-", "_") for a in access] if access else None,
                 managed_by_devpost_badge=devpost_managed,
                 page=page,
                 per_page=per_page,
@@ -146,6 +149,10 @@ def hackathons(
 
             hackathons_list = result.get("hackathons", [])
             meta = result.get("meta", {})
+            
+            # Filter by featured if requested
+            if featured:
+                hackathons_list = [h for h in hackathons_list if h.get("featured")]
 
             if output_json(result, is_json):
                 return
@@ -180,9 +187,9 @@ def hackathons(
 
 @cli.command(name="list", hidden=True)
 @click.option("--limit", "-l", default=20, help="Number of hackathons to show (default: 20)")
-@click.option("--state", "-s", type=click.Choice(["open", "closed", "ended", "upcoming", "judging", "submitting"]),
+@click.option("--state", "-s", type=click.Choice(["open", "closed", "ended", "upcoming"]),
               help="Filter by hackathon state ('closed' is an alias for 'ended')")
-@click.option("--sort", type=click.Choice(["recently-added", "submission-deadline", "prize-amount", "popularity"]),
+@click.option("--sort", type=click.Choice(["recently-added", "deadline", "prize-amount"]),
               default="recently-added", help="Sort order (default: recently-added)")
 @click.option("--query", "-q", help="Search query string")
 @click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
@@ -261,16 +268,73 @@ def overview(slug: str, is_json: Optional[bool]):
             if output_json(hackathon, is_json):
                 return
 
-            console.print(Panel(
+            # Build extended info
+            lines = [
                 f"[bold cyan]{hackathon.get('title', 'Unknown')}[/bold cyan]\n\n"
                 f"[green]URL:[/green] {hackathon.get('url', 'N/A')}\n"
-                f"[green]Status:[/green] {hackathon.get('open_state', 'unknown')}\n"
-                f"[green]Prize:[/green] {hackathon.get('prize_amount', 'N/A')}\n"
-                f"[green]Submissions:[/green] {hackathon.get('submissions_count', 'N/A')}\n"
-                f"[green]Ends:[/green] {hackathon.get('ends_at', 'N/A')}\n\n"
-                f"{hackathon.get('tagline', 'No description')[:300]}",
+                f"[green]Status:[/green] {hackathon.get('open_state', 'unknown')}",
+            ]
+            
+            # Add featured badge if applicable
+            if hackathon.get("featured"):
+                lines.append("[yellow]★ Featured[/yellow]")
+            
+            # Add prize info
+            prize = hackathon.get('prize_amount', 'N/A')
+            lines.append(f"[green]Prize:[/green] {prize}")
+            
+            # Add prize counts if available
+            prize_counts = hackathon.get('prizes_counts', {})
+            if prize_counts:
+                cash = prize_counts.get('cash', 0)
+                other = prize_counts.get('other', 0)
+                lines.append(f"[green]Prize categories:[/green] {cash} cash, {other} other")
+            
+            # Add participant/submission counts
+            submissions = hackathon.get('submissions_count', 'N/A')
+            registrations = hackathon.get('registrations_count', 'N/A')
+            lines.append(f"[green]Submissions:[/green] {submissions}")
+            if registrations != 'N/A':
+                lines.append(f"[green]Registrations:[/green] {registrations}")
+            
+            # Add dates
+            lines.append(f"[green]Ends:[/green] {hackathon.get('ends_at', 'N/A')}")
+            if hackathon.get('submission_period_dates'):
+                lines.append(f"[green]Period:[/green] {hackathon['submission_period_dates']}")
+            
+            # Add access type
+            if hackathon.get('invite_only'):
+                lines.append("[green]Access:[/green] Invite-only")
+            else:
+                lines.append("[green]Access:[/green] Public")
+            
+            # Add organization
+            if hackathon.get('organization_name'):
+                lines.append(f"[green]Organization:[/green] {hackathon['organization_name']}")
+            
+            # Add Devpost-managed badge
+            if hackathon.get('managed_by_devpost_badge'):
+                lines.append("[green]Managed by:[/green] Devpost")
+            
+            # Add themes
+            themes = hackathon.get('themes', [])
+            if themes:
+                theme_names = [t.get('name', '') for t in themes if t.get('name')]
+                if theme_names:
+                    lines.append(f"[green]Themes:[/green] {', '.join(theme_names[:5])}")
+            
+            # Add submission gallery URL
+            if hackathon.get('submission_gallery_url'):
+                lines.append(f"[green]Gallery:[/green] {hackathon['submission_gallery_url']}")
+            
+            # Add tagline/description
+            tagline = hackathon.get('tagline', 'No description')
+            lines.append(f"\n{tagline[:300]}")
+            
+            console.print(Panel(
+                "\n".join(lines),
                 title="Hackathon Details",
-                border_style="blue"
+                border_style="yellow" if hackathon.get("featured") else "blue"
             ))
 
     _run_async(_info())
@@ -298,16 +362,56 @@ async def _info_cmd(slug: str, is_json: Optional[bool]):
         if output_json(hackathon, is_json):
             return
 
-        console.print(Panel(
+        # Build extended info (same as overview command)
+        lines = [
             f"[bold cyan]{hackathon.get('title', 'Unknown')}[/bold cyan]\n\n"
             f"[green]URL:[/green] {hackathon.get('url', 'N/A')}\n"
-            f"[green]Status:[/green] {hackathon.get('open_state', 'unknown')}\n"
-            f"[green]Prize:[/green] {hackathon.get('prize_amount', 'N/A')}\n"
-            f"[green]Submissions:[/green] {hackathon.get('submissions_count', 'N/A')}\n"
-            f"[green]Ends:[/green] {hackathon.get('ends_at', 'N/A')}\n\n"
-            f"{hackathon.get('tagline', 'No description')[:300]}",
+            f"[green]Status:[/green] {hackathon.get('open_state', 'unknown')}",
+        ]
+        
+        if hackathon.get("featured"):
+            lines.append("[yellow]★ Featured[/yellow]")
+        
+        lines.append(f"[green]Prize:[/green] {hackathon.get('prize_amount', 'N/A')}")
+        
+        prize_counts = hackathon.get('prizes_counts', {})
+        if prize_counts:
+            lines.append(f"[green]Prize categories:[/green] {prize_counts.get('cash', 0)} cash, {prize_counts.get('other', 0)} other")
+        
+        lines.append(f"[green]Submissions:[/green] {hackathon.get('submissions_count', 'N/A')}")
+        if hackathon.get('registrations_count') != 'N/A':
+            lines.append(f"[green]Registrations:[/green] {hackathon.get('registrations_count')}")
+        
+        lines.append(f"[green]Ends:[/green] {hackathon.get('ends_at', 'N/A')}")
+        if hackathon.get('submission_period_dates'):
+            lines.append(f"[green]Period:[/green] {hackathon['submission_period_dates']}")
+        
+        if hackathon.get('invite_only'):
+            lines.append("[green]Access:[/green] Invite-only")
+        else:
+            lines.append("[green]Access:[/green] Public")
+        
+        if hackathon.get('organization_name'):
+            lines.append(f"[green]Organization:[/green] {hackathon['organization_name']}")
+        
+        if hackathon.get('managed_by_devpost_badge'):
+            lines.append("[green]Managed by:[/green] Devpost")
+        
+        themes = hackathon.get('themes', [])
+        if themes:
+            theme_names = [t.get('name', '') for t in themes if t.get('name')]
+            if theme_names:
+                lines.append(f"[green]Themes:[/green] {', '.join(theme_names[:5])}")
+        
+        if hackathon.get('submission_gallery_url'):
+            lines.append(f"[green]Gallery:[/green] {hackathon['submission_gallery_url']}")
+        
+        lines.append(f"\n{hackathon.get('tagline', 'No description')[:300]}")
+        
+        console.print(Panel(
+            "\n".join(lines),
             title="Hackathon Details",
-            border_style="blue"
+            border_style="yellow" if hackathon.get("featured") else "blue"
         ))
 
 
@@ -359,7 +463,7 @@ def scrape(url: str, is_json: bool, output: Optional[str]):
 @cli.command(name="gallery")
 @click.argument("slug")
 @click.option("--limit", "-l", default=20, help="Number of projects to show (default: 20)")
-@click.option("--sort", type=click.Choice(["recent", "liked", "winners"]), default="recent", help="Sort order")
+@click.option("--sort", type=click.Choice(["recent", "winners"]), default="recent", help="Sort order")
 @click.option("--category", help="Filter by category (hackathon-specific)")
 @click.option("--query", "-q", help="Search within gallery")
 @click.option("--page", type=int, default=1, help="Page number")
@@ -518,6 +622,87 @@ def project(url: str, is_json: Optional[bool]):
             ))
 
     _run_async(_project())
+
+
+@cli.command()
+@click.argument("username")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
+@click.option("--verbose", "-v", is_flag=True, help="Show full project list and hackathon participations")
+def user(username: str, is_json: Optional[bool], verbose: bool):
+    """Get user profile info.
+    
+    Uses browser automation to extract name, bio, skills, projects,
+    hackathon participations, location, and social links from the user's profile.
+    
+    \b
+    Examples:
+      devpost user tech-dawg015
+      devpost user alexrchen --json
+      devpost user mintychochip --verbose  # Show all projects and hackathons
+    """
+    async def _user():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            profile = await client.get_user_profile(username)
+
+            if output_json(profile, is_json):
+                return
+
+            if not profile.get("success"):
+                console.print(f"[red]Error: {profile.get('error', 'Unknown error')}[/red]")
+                sys.exit(1)
+
+            data = profile.get("data", {})
+            
+            lines = [
+                f"[bold cyan]{data.get('name', username)}[/bold cyan]",
+                f"[green]Username:[/green] {username}",
+                f"[green]Profile:[/green] {BASE_URL}/users/{username}",
+            ]
+            
+            if data.get("bio"):
+                lines.append(f"\n[dim]{data['bio'][:300]}[/dim]")
+            
+            if data.get("location"):
+                lines.append(f"\n[green]Location:[/green] {data['location']}")
+            
+            if data.get("skills"):
+                lines.append(f"\n[green]Skills:[/green] {', '.join(data['skills'][:10])}")
+            
+            # Show project count and list if verbose
+            projects = data.get("projects", [])
+            lines.append(f"\n[green]Projects:[/green] {len(projects)}")
+            if verbose and projects:
+                lines.append("\n[bold]Project List:[/bold]")
+                for p in projects:
+                    proj_line = f"  • {p.get('title', 'Unknown')}"
+                    if p.get('hackathon'):
+                        proj_line += f" [dim](from {p['hackathon']})[/dim]"
+                    if p.get('stats'):
+                        proj_line += f" [dim]{p['stats']}[/dim]"
+                    lines.append(proj_line)
+            
+            # Show hackathon count and list if verbose
+            hackathons = data.get("hackathons", [])
+            lines.append(f"\n[green]Hackathon participations:[/green] {len(hackathons)}")
+            if verbose and hackathons:
+                lines.append("\n[bold]Hackathons:[/bold]")
+                for h in hackathons[:15]:
+                    lines.append(f"  • {h.get('name', 'Unknown')} [dim]→ {h.get('url', '')[:50]}[/dim]")
+                if len(hackathons) > 15:
+                    lines.append(f"  [dim]... and {len(hackathons) - 15} more[/dim]")
+            
+            if data.get("links"):
+                lines.append("\n[green]Social Links:[/green]")
+                for k, v in data["links"].items():
+                    lines.append(f"  {k}: {v}")
+
+            console.print(Panel(
+                "\n".join(lines),
+                title="User Profile",
+                border_style="blue"
+            ))
+
+    _run_async(_user())
 
 
 @cli.command()
@@ -1280,6 +1465,69 @@ def prizes(slug: str, is_json: Optional[bool]):
     _run_async(_prizes())
 
 
+@details.command()
+@click.argument("slug")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def faq(slug: str, is_json: Optional[bool]):
+    """View hackathon FAQ."""
+    async def _faq():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            # Try to fetch the FAQ page
+            from httpx import AsyncClient
+            client_http = AsyncClient(headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "text/html",
+            }, follow_redirects=True)
+            
+            try:
+                resp = await client_http.get(f"https://{slug}.devpost.com/details/faq")
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(resp.text, "html.parser")
+                
+                # Look for actual FAQ content (Q&A pairs)
+                faq_items = []
+                for elem in soup.find_all(['div', 'section', 'article'], class_=re.compile(r'faq|question|answer|qa', re.I)):
+                    text = elem.get_text(strip=True)
+                    if text and len(text) > 20:
+                        faq_items.append(text[:500])
+                
+                # Check for help desk link
+                help_links = []
+                for a in soup.find_all('a', href=re.compile(r'help\.devpost\.com', re.I)):
+                    href = a.get('href', '')
+                    if href and href not in help_links:
+                        help_links.append(href)
+                
+                result = {
+                    "slug": slug,
+                    "faq_items": faq_items[:10],
+                    "help_links": help_links,
+                }
+                
+                if output_json(result, is_json):
+                    return
+                
+                if faq_items:
+                    console.print(Panel(
+                        f"[bold cyan]{slug}[/bold cyan] — FAQ\n\n"
+                        + "\n\n".join([f"[green]Q:[/green] {item[:300]}" for item in faq_items[:5]]),
+                        title="FAQ",
+                        border_style="cyan",
+                    ))
+                elif help_links:
+                    console.print(f"[yellow]No hackathon-specific FAQ found. Check the Devpost Help Desk:[/yellow]")
+                    for link in help_links[:2]:
+                        console.print(f"  • {link}")
+                else:
+                    console.print("[yellow]No FAQ content found for this hackathon.[/yellow]")
+                    console.print("  Check the Devpost Help Desk: https://help.devpost.com/")
+                    
+            finally:
+                await client_http.aclose()
+    
+    _run_async(_faq())
+
+
 @cli.command()
 @click.option("--popular", is_flag=True, help="Show popular themes with active counts")
 @click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
@@ -1322,6 +1570,36 @@ def themes(popular: bool, is_json: Optional[bool]):
                     console.print(f"  {i:2}. {t.get('name', 'Unknown')}")
     
     _run_async(_themes())
+
+
+@cli.command()
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON")
+def trending(is_json: Optional[bool]):
+    """List trending technology tags on Devpost.
+    
+    Shows the most popular technologies used in projects.
+    
+    \b
+    Examples:
+      devpost trending                       # All trending tech
+      devpost trending --json                # JSON output
+    """
+    async def _trending():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            technologies = await client.get_trending_technologies()
+            
+            if output_json(technologies, is_json):
+                return
+            
+            if not technologies:
+                console.print("[yellow]No trending technologies found.[/yellow]")
+                return
+            
+            console.print("[bold]Trending Technologies on Devpost:[/bold]\n")
+            for i, tech in enumerate(technologies, 1):
+                console.print(f"  {i:2}. {tech}")
+    
+    _run_async(_trending())
 
 
 @cli.group()

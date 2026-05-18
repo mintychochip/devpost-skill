@@ -96,9 +96,17 @@ def _extract_section(
     field: str,
     heading_patterns: list[str],
 ) -> None:
-    """Extract list items following headings matching any pattern into result[field]."""
+    """Extract content for a rules section (eligibility, requirements, judging, etc.).
+    
+    Handles both:
+    1. Traditional h1-h6 headings followed by lists/paragraphs
+    2. Devpost rules page structure with numbered sections like:
+       "4. ELIGIBILITY: To be eligible..." in <strong> tags
+    """
     items = []
-    for heading in soup.find_all(re.compile(r'^h[1-6]$', re.I)):
+    
+    # First pass: traditional h1-h6 headings (for tests and simple pages)
+    for heading in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
         text = heading.get_text(strip=True).lower()
         if any(re.search(p, text) for p in heading_patterns):
             sibling = heading.find_next_sibling()
@@ -112,12 +120,61 @@ def _extract_section(
                     p_text = sibling.get_text(strip=True)
                     if p_text and len(p_text) < 500:
                         items.append(p_text)
-                elif sibling.name == 'table':
-                    for row in sibling.find_all('tr'):
-                        row_text = row.get_text(strip=True)
-                        if row_text and len(row_text) < 500:
-                            items.append(row_text)
                 sibling = sibling.find_next_sibling()
+    
+    # Second pass: strong tags with numbered sections (for Devpost rules pages)
+    for strong in soup.find_all('strong'):
+        text = strong.get_text(strip=True).lower()
+        if any(re.search(p, text) for p in heading_patterns):
+            parent = strong.parent
+            
+            # Extract content from the same paragraph (after the heading)
+            if parent and parent.name == 'p':
+                # Get all text from paragraph, remove the heading prefix
+                full_text = parent.get_text(strip=True)
+                heading_text = strong.get_text(strip=True)
+                # Remove heading and any colon/numbering prefix
+                content = full_text.replace(heading_text, '', 1).lstrip(':').strip()
+                
+                # Split long content by numbered items (1), (2), etc.
+                if content:
+                    if len(content) > 500:
+                        # Split by numbered patterns like (1), (2), etc.
+                        numbered_items = re.split(r'\s*\((\d+)\)\s*', content)
+                        if len(numbered_items) > 1:
+                            # Reconstruct numbered items
+                            for i in range(1, len(numbered_items), 2):
+                                num = numbered_items[i]
+                                text_part = numbered_items[i + 1] if i + 1 < len(numbered_items) else ''
+                                item_text = f"({num}) {text_part}".strip()
+                                if item_text and len(item_text) < 500:
+                                    items.append(item_text)
+                        else:
+                            # Split by sentences (period followed by space and capital letter)
+                            sentences = re.split(r'(?<=[.;])\s+(?=[A-Z])', content)
+                            for sent in sentences:
+                                if sent and len(sent) < 500:
+                                    items.append(sent)
+                    elif len(content) < 500:
+                        items.append(content)
+                
+                # Extract from following sibling paragraphs until next numbered section
+                sibling = parent.find_next_sibling()
+                while sibling:
+                    # Stop at next numbered section (e.g., "5.", "6.", etc.)
+                    if sibling.name == 'p':
+                        sib_text = sibling.get_text(strip=True)
+                        if re.match(r'^\d+\.\s', sib_text):
+                            break
+                        if sib_text and len(sib_text) < 500 and sib_text.strip() != '\uFFFD':
+                            items.append(sib_text)
+                    elif sibling.name in ('ul', 'ol'):
+                        for li in sibling.find_all('li'):
+                            li_text = li.get_text(strip=True)
+                            if li_text and len(li_text) < 500:
+                                items.append(li_text)
+                    sibling = sibling.find_next_sibling()
+    
     result[field] = list(dict.fromkeys(items))[:30]
 
 
@@ -373,17 +430,6 @@ class DevpostClient:
         if "closed" in api_states:
             api_states = [s if s != "closed" else "ended" for s in api_states]
 
-        if api_states == ["ended"] or api_states == ["closed"]:
-            ended_data = await self._list_ended_hackathons(
-                limit=limit,
-                query=search,
-                order_by=order_by,
-            )
-            return {
-                "hackathons": ended_data,
-                "meta": {"total_count": len(ended_data), "per_page": limit, "fuzzy": False},
-            }
-
         cache_key = make_list_key(
             state=open_state,
             order_by=order_by,
@@ -462,122 +508,6 @@ class DevpostClient:
             self._cache.set(cache_key, result)
 
         return result
-        data = resp.json()
-        hackathons = data.get("hackathons", [])
-
-        for h in hackathons:
-            if h.get("prize_amount"):
-                h["prize_amount"] = clean_html(h["prize_amount"])
-            h["ends_at"] = h.get("time_left_to_submission") or h.get("submission_period_dates")
-
-        if self._cache:
-            self._cache.set(cache_key, hackathons)
-
-        return hackathons
-
-    async def _list_ended_hackathons(
-        self,
-        limit: int = 20,
-        query: Optional[str] = None,
-        order_by: str = "recently-added",
-    ) -> list[dict]:
-        """List ended (closed) hackathons by paging through the API.
-
-        The Devpost API does not support filtering by status[]=ended,
-        so we page through results starting from later pages where
-        ended hackathons typically appear.
-        """
-        cache_key = make_list_key(state="ended", order_by=order_by, search=query, limit=limit)
-        if self._cache:
-            cached = self._cache.get(cache_key)
-            if cached is not None:
-                return cached
-
-        ended = []
-
-        for start_page in [18, 15, 20, 25, 30, 35, 40, 1, 5, 10]:
-            if len(ended) >= limit:
-                break
-            try:
-                api_params = {"page": start_page, "per_page": 9, "order_by": order_by}
-                if query:
-                    api_params["search"] = query
-                resp = await self._request_with_retry(
-                    "GET",
-                    f"{API_BASE}/hackathons",
-                    params=api_params,
-                    headers={"Accept": "application/json"},
-                )
-                data = resp.json()
-                hackathons = data.get("hackathons", [])
-                if not hackathons:
-                    continue
-                for h in hackathons:
-                    if h.get("open_state") == "ended":
-                        if h.get("prize_amount"):
-                            h["prize_amount"] = clean_html(h["prize_amount"])
-                        h["ends_at"] = h.get("time_left_to_submission") or h.get("submission_period_dates")
-                        if query:
-                            q = query.lower()
-                            title = (h.get("title") or "").lower()
-                            tagline = (h.get("tagline") or "").lower()
-                            if q not in title and q not in tagline:
-                                continue
-                        ended.append(h)
-            except DevpostError:
-                continue
-
-        page = 19
-        max_scan = 60
-        while len(ended) < limit and page <= max_scan:
-            try:
-                api_params = {"page": page, "per_page": 9, "order_by": order_by}
-                if query:
-                    api_params["search"] = query
-                resp = await self._request_with_retry(
-                    "GET",
-                    f"{API_BASE}/hackathons",
-                    params=api_params,
-                    headers={"Accept": "application/json"},
-                )
-                data = resp.json()
-                hackathons = data.get("hackathons", [])
-                if not hackathons:
-                    break
-                has_ended = False
-                for h in hackathons:
-                    if h.get("open_state") == "ended":
-                        has_ended = True
-                        if h.get("prize_amount"):
-                            h["prize_amount"] = clean_html(h["prize_amount"])
-                        h["ends_at"] = h.get("time_left_to_submission") or h.get("submission_period_dates")
-                        if query:
-                            q = query.lower()
-                            title = (h.get("title") or "").lower()
-                            tagline = (h.get("tagline") or "").lower()
-                            if q not in title and q not in tagline:
-                                continue
-                        ended.append(h)
-                if not has_ended:
-                    break
-            except DevpostError:
-                break
-            page += 1
-
-        ended = ended[:limit]
-
-        seen_urls = set()
-        deduped = []
-        for h in ended:
-            url = h.get("url", "")
-            if url not in seen_urls:
-                seen_urls.add(url)
-                deduped.append(h)
-
-        if self._cache:
-            self._cache.set(cache_key, deduped, ttl=1800)
-
-        return deduped
 
     async def get_hackathon_by_slug(self, slug: str) -> Optional[dict]:
         """Get hackathon by URL slug."""
@@ -662,6 +592,22 @@ class DevpostClient:
                             data["initial_state"] = json.loads(json_match.group(1))
                     except (json.JSONDecodeError, ValueError) as e:
                         logger.debug("Could not parse initial state JSON: %s", e)
+                
+                # Parse JSON-LD structured data (Event schema)
+                if 'application/ld+json' in (script.get('type', '') or ''):
+                    try:
+                        json_ld = json.loads(text)
+                        if isinstance(json_ld, dict) and json_ld.get('@type') == 'Event':
+                            data["json_ld"] = {
+                                "name": json_ld.get('name'),
+                                "start_date": json_ld.get('startDate'),
+                                "end_date": json_ld.get('endDate'),
+                                "organizer": json_ld.get('organizer', {}).get('name') if json_ld.get('organizer') else None,
+                                "event_status": json_ld.get('eventStatus'),
+                                "event_attendance_mode": json_ld.get('eventAttendanceMode'),
+                            }
+                    except (json.JSONDecodeError, ValueError, TypeError) as e:
+                        logger.debug("Could not parse JSON-LD: %s", e)
 
             data["title"] = (
                 self._get_meta(soup, "og:title")
@@ -777,11 +723,12 @@ class DevpostClient:
         base_gallery_url = f"{hackathon_url.rstrip('/')}/project-gallery"
         
         params = {}
-        if sort_by and sort_by != "recent":
-            if sort_by == "liked":
-                params["sort_by"] = "liking_count"
-            elif sort_by == "winners":
+        if sort_by:
+            if sort_by == "winners":
                 params["winners_only"] = "true"
+            elif sort_by in ("recent", "alpha"):
+                params["sort_by"] = sort_by
+            # Note: "liked" sorting is not supported by the Devpost gallery page
         if category:
             params["filter[category]"] = category
         if search_query:
@@ -1090,6 +1037,257 @@ class DevpostClient:
 
         return result
 
+    async def get_user_profile(self, username: str) -> dict[str, Any]:
+        """Get user profile info using Playwright (profile pages are JS-rendered)."""
+        cache_key = f"user_profile_{username}"
+        if self._cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            return {
+                "error": "Playwright not installed. Install with: pip install playwright && playwright install chromium",
+                "code": "DEPENDENCY_MISSING",
+            }
+
+        result = {"success": False, "username": username, "steps": [], "data": {}}
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=not self.headed)
+            page = await browser.new_page()
+
+            try:
+                user_url = f"{BASE_URL}/users/{username}"
+                result["steps"].append(f"Loading {user_url}")
+                await page.goto(user_url, timeout=30000)
+                await page.wait_for_load_state("networkidle")
+                await asyncio.sleep(2)
+
+                data = {}
+
+                # Check if page is 404
+                if "404" in await page.title():
+                    result["error"] = f"User '{username}' not found"
+                    result["code"] = "NOT_FOUND"
+                    return result
+
+                # Extract name
+                try:
+                    name = await page.wait_for_selector("h1", timeout=5000)
+                    raw_name = await name.text_content()
+                    # Clean up whitespace and normalize
+                    data["name"] = " ".join(raw_name.split())
+                except Exception:
+                    logger.debug("Could not extract user name")
+
+                # Extract bio/about
+                try:
+                    bio = await page.query_selector(".bio, .about, .description, p")
+                    if bio:
+                        data["bio"] = (await bio.text_content()).strip()
+                except Exception:
+                    logger.debug("Could not extract bio")
+
+                # Extract skills
+                try:
+                    skills = []
+                    skill_elems = await page.query_selector_all(".skill, .tag, .pill")
+                    for skill in skill_elems[:20]:
+                        text = await skill.text_content()
+                        if text and len(text) < 50:
+                            skills.append(text.strip())
+                    if skills:
+                        data["skills"] = skills
+                except Exception:
+                    logger.debug("Could not extract skills")
+
+                # Extract projects (find H5 headings and their parent links)
+                try:
+                    projects = []
+                    seen_titles = set()
+                    
+                    # Find all H5 headings (project titles)
+                    h5_elements = await page.query_selector_all("h5")
+                    
+                    for h5 in h5_elements[:20]:
+                        title = await h5.text_content()
+                        title = title.strip() if title else ""
+                        
+                        # Filter: must be a reasonable project title
+                        if not title or len(title) < 3 or len(title) > 100:
+                            continue
+                        if title.lower() in ['back', 'view all', 'software', 'projects', 'connect']:
+                            continue
+                        if title in seen_titles:
+                            continue
+                        
+                        seen_titles.add(title)
+                        
+                        # Find parent container
+                        parent = await h5.query_selector("xpath=../..")
+                        project_info = {"title": title}
+                        
+                        # Try to find the project link
+                        if parent:
+                            proj_link = await parent.query_selector("a[href*='/software/']")
+                            if proj_link:
+                                href = await proj_link.get_attribute("href")
+                                if href and '/built-with/' not in href:
+                                    project_info["url"] = f"{BASE_URL}{href}" if href.startswith('/') else href
+                            
+                            # Try to find hackathon info
+                            hack_link = await parent.query_selector("a[href*='.devpost.com']:not([href*='/users/']):not([href*='/software/'])")
+                            if hack_link:
+                                hack_text = await hack_link.text_content()
+                                hack_href = await hack_link.get_attribute("href")
+                                if hack_text and hack_href and len(hack_text) < 60:
+                                    hack_text = hack_text.strip()
+                                    if hack_text.lower() not in ['log in', 'sign up', 'about', 'careers', 'contact', 'help', 'blog']:
+                                        if 'info.devpost.com' not in hack_href and 'help.devpost.com' not in hack_href:
+                                            project_info["hackathon"] = hack_text
+                                            project_info["hackathon_url"] = hack_href
+                            
+                            # Try to find stats
+                            stats_elem = await parent.query_selector(".counts, .stats")
+                            if stats_elem:
+                                stats_text = await stats_elem.text_content()
+                                if stats_text:
+                                    project_info["stats"] = stats_text.strip()
+                        
+                        projects.append(project_info)
+                    
+                    data["projects"] = projects
+                    data["project_count"] = len(projects)
+                except Exception as e:
+                    logger.debug("Could not extract projects: %s", e)
+
+                # Extract hackathon participations from /challenges tab
+                try:
+                    hackathons = []
+                    
+                    # First, try to find hackathon count from nav
+                    nav_link = await page.query_selector("a[href*='/challenges']")
+                    if nav_link:
+                        count_elem = await nav_link.query_selector(".totals span")
+                        if count_elem:
+                            count_text = await count_elem.text_content()
+                            if count_text:
+                                data["hackathon_count"] = int(count_text.strip())
+                    
+                    # Navigate to challenges page to get actual list
+                    challenges_url = f"{BASE_URL}/{username}/challenges"
+                    result["steps"].append(f"Loading {challenges_url}")
+                    await page.goto(challenges_url, timeout=30000)
+                    await page.wait_for_load_state("networkidle")
+                    await asyncio.sleep(2)
+                    
+                    # Extract hackathon cards - look for links with subdomain pattern
+                    all_links = await page.query_selector_all("a[href*='.devpost.com']")
+                    seen_hackathons = set()
+                    seen_urls = set()
+                    
+                    for link in all_links[:50]:
+                        hack_href = await link.get_attribute("href")
+                        if not hack_href:
+                            continue
+                        
+                        # Skip non-hackathon links
+                        if '/users/' in hack_href or '/hackathons' in hack_href:
+                            continue
+                        if 'info.devpost.com' in hack_href or 'help.devpost.com' in hack_href or 'secure.devpost.com' in hack_href:
+                            continue
+                        
+                        # Check if it's a hackathon subdomain URL
+                        if '.devpost.com/' not in hack_href:
+                            continue
+                        
+                        # Extract hackathon name from URL (subdomain)
+                        import re
+                        match = re.search(r'https?://([a-z0-9-]+)\.devpost\.com', hack_href)
+                        if match:
+                            hack_subdomain = match.group(1)
+                            # Skip common non-hackathon subdomains
+                            if hack_subdomain in ['devpost', 'info', 'help', 'secure', 'api', 'www']:
+                                continue
+                            
+                            if hack_href not in seen_urls:
+                                seen_urls.add(hack_href)
+                                
+                                # Get display text (first line, trimmed)
+                                hack_text = await link.text_content()
+                                if hack_text:
+                                    hack_text = hack_text.strip().split('\n')[0].strip()[:50]
+                                
+                                hackathons.append({
+                                    "name": hack_text or hack_subdomain,
+                                    "url": hack_href,
+                                })
+                    
+                    data["hackathons"] = hackathons
+                    if not data.get("hackathon_count"):
+                        data["hackathon_count"] = len(hackathons)
+                    
+                    # Navigate back to profile
+                    result["steps"].append(f"Returning to profile")
+                    await page.goto(user_url, timeout=30000)
+                    await page.wait_for_load_state("networkidle")
+                    
+                except Exception as e:
+                    logger.debug("Could not extract hackathons: %s", e)
+                    # Try to navigate back if we got stuck
+                    try:
+                        await page.goto(user_url, timeout=10000)
+                    except:
+                        pass
+
+                # Extract location
+                try:
+                    location = await page.query_selector(".location, .location-icon + *")
+                    if location:
+                        data["location"] = await location.text_content()
+                except Exception:
+                    logger.debug("Could not extract location")
+
+                # Extract social links
+                links = {}
+                try:
+                    github = await page.query_selector("a[href*='github.com']")
+                    if github:
+                        links["github"] = await github.get_attribute("href")
+                    twitter = await page.query_selector("a[href*='twitter.com'], a[href*='x.com']")
+                    if twitter:
+                        links["twitter"] = await twitter.get_attribute("href")
+                    linkedin = await page.query_selector("a[href*='linkedin.com']")
+                    if linkedin:
+                        links["linkedin"] = await linkedin.get_attribute("href")
+                    website = await page.query_selector("a.website-link, a[rel='me']")
+                    if website:
+                        href = await website.get_attribute("href")
+                        if href and "devpost.com" not in href:
+                            links["website"] = href
+                except Exception:
+                    logger.debug("Could not extract social links")
+                if links:
+                    data["links"] = links
+
+                result["data"] = data
+                result["success"] = True
+                result["steps"].append("Successfully extracted profile")
+
+            except Exception as e:
+                result["error"] = str(e)
+                result["steps"].append(f"Error: {e}")
+            finally:
+                await browser.close()
+
+        if result["success"] and self._cache:
+            self._cache.set(cache_key, result, ttl=3600)
+
+        return result
+
     async def parse_rules_page(self, slug: str) -> dict[str, Any]:
         """Parse a hackathon's rules page into structured sections."""
         validate_slug(slug)
@@ -1312,41 +1510,46 @@ class DevpostClient:
                 "themes": [t.get("name", "") for t in info.get("themes", [])],
             }
 
-            scrape_data = None
-            try:
-                scrape_data = await self.scrape_hackathon_page(hackathon_url)
-            except DevpostError as e:
-                result["errors"].append(f"Scrape failed: {e.message}")
-
-            if scrape_data and scrape_data.get("success"):
+            # Fetch scrape, rules, and projects data in parallel for faster evaluation
+            scrape_task = self.scrape_hackathon_page(hackathon_url)
+            rules_task = self.parse_rules_page(slug)
+            projects_task = self.list_hackathon_projects(hackathon_url=hackathon_url, limit=500)
+            
+            scrape_data, rules_data, projects_data = await asyncio.gather(
+                scrape_task, rules_task, projects_task,
+                return_exceptions=True,
+            )
+            
+            # Process scrape data
+            if isinstance(scrape_data, DevpostError):
+                result["errors"].append(f"Scrape failed: {scrape_data.message}")
+                scrape_data = None
+            elif scrape_data and scrape_data.get("success"):
                 data = scrape_data.get("data", {})
                 if data.get("stats"):
                     if submissions_count is None:
                         submissions_count = data["stats"].get("submission")
 
-            rules_data = None
-            try:
-                rules_data = await self.parse_rules_page(slug)
-                if rules_data.get("success"):
-                    result["eligibility"] = rules_data.get("eligibility", [])
-                    result["requirements"] = rules_data.get("requirements", [])
-                    result["judging_criteria"] = rules_data.get("judging_criteria", [])
-                    result["prize_categories"] = rules_data.get("prize_categories", [])
-                    result["key_dates"] = rules_data.get("key_dates", [])
-                    result["sponsor_apis"] = rules_data.get("sponsor_apis", [])
-                else:
-                    err = rules_data.get("error", "Unknown rules error")
+            # Process rules data
+            if isinstance(rules_data, DevpostError):
+                result["errors"].append(f"Rules parse failed: {rules_data.message}")
+                rules_data = None
+            elif rules_data and not rules_data.get("success"):
+                err = rules_data.get("error", "Unknown rules error")
+                if err:
                     result["errors"].append(f"Rules parse failed: {err}")
-            except DevpostError as e:
-                result["errors"].append(f"Rules parse failed: {e.message}")
+            elif rules_data and rules_data.get("success"):
+                result["eligibility"] = rules_data.get("eligibility", [])
+                result["requirements"] = rules_data.get("requirements", [])
+                result["judging_criteria"] = rules_data.get("judging_criteria", [])
+                result["prize_categories"] = rules_data.get("prize_categories", [])
+                result["key_dates"] = rules_data.get("key_dates", [])
+                result["sponsor_apis"] = rules_data.get("sponsor_apis", [])
 
-            projects_data = None
-            try:
-                projects_data = await self.list_hackathon_projects(
-                    hackathon_url=hackathon_url, limit=500,
-                )
-            except DevpostError as e:
-                result["errors"].append(f"Projects fetch failed: {e.message}")
+            # Process projects data
+            if isinstance(projects_data, DevpostError):
+                result["errors"].append(f"Projects fetch failed: {projects_data.message}")
+                projects_data = None
 
             project_count = 0
             if projects_data and projects_data.get("success"):
@@ -1524,7 +1727,11 @@ class DevpostClient:
         limit: int = 20,
         order_by: Optional[str] = None,
     ) -> list[dict]:
-        """Search projects via /software/search."""
+        """Search projects via /software/search.
+        
+        Note: This endpoint is protected by AWS WAF and may return empty results.
+        For reliable project search, use the gallery command within a specific hackathon.
+        """
         cache_key = make_search_projects_key(query, limit, order_by)
         if self._cache:
             cached = self._cache.get(cache_key)
@@ -1535,6 +1742,8 @@ class DevpostClient:
         page = 1
         max_pages = (limit + 23) // 24
 
+        waf_detected = False
+        
         while page <= max_pages and len(projects) < limit:
             try:
                 params = {"query": query, "page": page}
@@ -1545,6 +1754,12 @@ class DevpostClient:
                     f"{BASE_URL}/software/search",
                     params=params,
                 )
+                
+                # Check for AWS WAF block (returns 202 with challenge page)
+                if resp.status_code == 202 or "awsWafCookieDomainList" in resp.text or "gokuProps" in resp.text:
+                    waf_detected = True
+                    break
+                
                 soup = BeautifulSoup(resp.text, "html.parser")
                 project_cards = soup.find_all(class_=re.compile(r'software-entry|project-item|gallery-item', re.I))
                 if not project_cards:
@@ -1578,6 +1793,14 @@ class DevpostClient:
             except DevpostError:
                 break
             page += 1
+
+        if waf_detected:
+            raise DevpostError(
+                "Project search is blocked by AWS WAF. "
+                "Use 'devpost gallery <hackathon>' to search within a specific hackathon, "
+                "or use 'devpost projects search/popular/built-with/featured' for project browsing.",
+                code="WAF_BLOCKED",
+            )
 
         projects = projects[:limit]
         if self._cache:
@@ -1633,8 +1856,15 @@ class DevpostClient:
         self,
         tech: str,
         limit: int = 20,
+        order_by: Optional[str] = None,
     ) -> list[dict]:
-        """Get projects built with a specific technology from /software/built-with/<tech>."""
+        """Get projects built with a specific technology from /software/built-with/<tech>.
+        
+        Args:
+            tech: Technology name (e.g., "Python", "React")
+            limit: Max projects to return
+            order_by: Sort order - "newest", "popular", or "trending"
+        """
         cache_key = make_built_with_key(tech, limit)
         if self._cache:
             cached = self._cache.get(cache_key)
@@ -1644,14 +1874,18 @@ class DevpostClient:
         tech_slug = tech.lower().replace(" ", "-").replace("+", "plus")
         projects = []
         page = 1
-        max_pages = (limit + 11) // 12
+        max_pages = (limit + 23) // 24
 
         while page <= max_pages and len(projects) < limit:
             try:
+                params = {"page": page}
+                if order_by and order_by != "newest":
+                    params["order_by"] = order_by
+                    
                 resp = await self._request_with_retry(
                     "GET",
                     f"{BASE_URL}/software/built-with/{tech_slug}",
-                    params={"page": page},
+                    params=params,
                 )
                 soup = BeautifulSoup(resp.text, "html.parser")
                 project_cards = soup.find_all(class_=re.compile(r'software-entry|project-item', re.I))
@@ -1684,7 +1918,7 @@ class DevpostClient:
         return projects
 
     async def get_featured_projects(self, limit: int = 20) -> list[dict]:
-        """Get staff picks/featured projects from /software."""
+        """Get staff picks/featured projects from /software/search?query=is:featured."""
         cache_key = make_featured_projects_key(limit)
         if self._cache:
             cached = self._cache.get(cache_key)
@@ -1693,17 +1927,22 @@ class DevpostClient:
 
         projects = []
         page = 1
-        max_pages = (limit + 11) // 12
+        max_pages = (limit + 23) // 24
 
         while page <= max_pages and len(projects) < limit:
             try:
                 resp = await self._request_with_retry(
                     "GET",
-                    f"{BASE_URL}/software",
-                    params={"page": page},
+                    f"{BASE_URL}/software/search",
+                    params={"query": "is:featured", "page": page},
                 )
+                
+                # Check for WAF block
+                if resp.status_code == 202 or "awsWafCookieDomainList" in resp.text:
+                    break
+                
                 soup = BeautifulSoup(resp.text, "html.parser")
-                project_cards = soup.find_all(class_=re.compile(r'software-entry|project-item|featured', re.I))
+                project_cards = soup.find_all(class_=re.compile(r'software-entry|project-item', re.I))
                 if not project_cards:
                     project_cards = soup.find_all("article")
                 for card in project_cards:
@@ -1716,9 +1955,7 @@ class DevpostClient:
                             continue
                         proj = await _extract_project_from_card(card, link, self)
                         if proj:
-                            featured_badge = card.find(class_=re.compile(r'staff-pick|featured|pick', re.I))
-                            if featured_badge:
-                                proj["is_featured"] = True
+                            proj["is_featured"] = True
                             if proj not in projects:
                                 projects.append(proj)
                     except Exception:
@@ -1731,6 +1968,45 @@ class DevpostClient:
         if self._cache:
             self._cache.set(cache_key, projects)
         return projects
+
+    async def get_trending_technologies(self) -> list[str]:
+        """Get trending technology tags from /software page."""
+        cache_key = "trending_technologies"
+        if self._cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        try:
+            resp = await self._request_with_retry("GET", f"{BASE_URL}/software")
+            soup = BeautifulSoup(resp.text, "html.parser")
+            
+            technologies = []
+            # Find technology tag links
+            for a in soup.find_all('a', href=lambda h: h and '/software/built-with/' in h):
+                text = a.get_text(strip=True)
+                if text and text.lower() != 'view all':
+                    technologies.append(text)
+            
+            # Remove duplicates while preserving order
+            seen = set()
+            unique = []
+            for tech in technologies:
+                if tech not in seen:
+                    seen.add(tech)
+                    unique.append(tech)
+            
+            if self._cache:
+                self._cache.set(cache_key, unique, ttl=3600)
+            
+            return unique
+
+        except DevpostError as e:
+            logger.debug("Could not fetch trending technologies: %s", e.message)
+            return []
+        except Exception as e:
+            logger.debug("Error fetching trending technologies: %s", e)
+            return []
 
     async def get_participants(self, slug: str, limit: int = 50) -> dict[str, Any]:
         """Get participants from /{slug}/participants."""
@@ -1934,7 +2210,12 @@ class DevpostClient:
         return result
 
     async def get_themes(self, popular: bool = False) -> list[dict]:
-        """Get all themes or popular themes from API."""
+        """Get all themes or popular themes from API.
+        
+        Handles both response formats:
+        - /api/themes returns bare list: [{"name": "..."}, ...]
+        - /api/themes/popular returns wrapped: {"themes": [{"name": "..."}, ...]}
+        """
         endpoint = "themes/popular" if popular else "themes"
         cache_key = f"themes_{'popular' if popular else 'all'}"
         
@@ -1950,7 +2231,14 @@ class DevpostClient:
         )
         data = resp.json()
         
-        themes = data.get("themes", [])
+        # Handle both response formats
+        if isinstance(data, dict):
+            themes = data.get("themes", [])
+        elif isinstance(data, list):
+            themes = data
+        else:
+            themes = []
+        
         if self._cache:
             self._cache.set(cache_key, themes)
         

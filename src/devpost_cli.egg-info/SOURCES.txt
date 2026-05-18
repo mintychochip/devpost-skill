@@ -5,6 +5,7 @@ src/devpost_cli/__main__.py
 src/devpost_cli/cache.py
 src/devpost_cli/cli.py
 src/devpost_cli/core.py
+src/devpost_cli/logging_config.py
 src/devpost_cli/session.py
 src/devpost_cli.egg-info/PKG-INFO
 src/devpost_cli.egg-info/SOURCES.txt
@@ -12,6 +13,7 @@ src/devpost_cli.egg-info/dependency_links.txt
 src/devpost_cli.egg-info/entry_points.txt
 src/devpost_cli.egg-info/requires.txt
 src/devpost_cli.egg-info/top_level.txt
+tests/test_cache.py
 tests/test_cli.py
 tests/test_core_auth.py
 tests/test_core_client.py
