@@ -1400,6 +1400,102 @@ def my_submissions(limit: int, is_json: Optional[bool]):
 
 
 @cli.command()
+@click.argument("hackathon_slug")
+@click.option("--title", "-t", required=True, help="Project title")
+@click.option("--tagline", required=True, help="Short description (max 140 chars)")
+@click.option("--description", "-d", help="Full project description (markdown)")
+@click.option("--description-file", help="Path to markdown file for description")
+@click.option("--built-with", "-b", help="Comma-separated technologies")
+@click.option("--github", help="GitHub repository URL")
+@click.option("--demo", help="Live demo URL")
+@click.option("--video", help="Demo video URL")
+@click.option("--dry-run", is_flag=True, help="Test without actually submitting")
+def submit(hackathon_slug: str, title: str, tagline: str, description: Optional[str],
+           description_file: Optional[str], built_with: Optional[str], github: Optional[str],
+           demo: Optional[str], video: Optional[str], dry_run: bool):
+    """Submit a new project to a hackathon.
+    
+    Requires authentication. Always test with --dry-run first!
+    
+    \b
+    Examples:
+      devpost submit rapid-agent -t "My Project" --tagline "AI-powered solution"
+      devpost submit rapid-agent -t "Demo" --tagline "Cool demo" --dry-run
+      devpost submit rapid-agent -t "Project" --tagline "Tagline" \\
+        --github "https://github.com/user/repo" \\
+        --demo "https://demo.example.com"
+    """
+    async def _submit():
+        try:
+            email, password = AuthenticatedClient.get_credentials()
+        except DevpostError as e:
+            console.print(f"[red]Error: {e.message}[/red]")
+            console.print("Set credentials with: devpost auth login")
+            sys.exit(1)
+
+        # Process description from file if specified
+        final_description = description
+        if description_file:
+            try:
+                from pathlib import Path
+                final_description = Path(description_file).read_text(encoding='utf-8')
+                console.print(f"[dim]Loaded description from {description_file}[/dim]")
+            except FileNotFoundError:
+                console.print(f"[red]Error: Description file not found: {description_file}[/red]")
+                sys.exit(1)
+
+        if not final_description:
+            console.print("[red]Error: --description or --description-file is required[/red]")
+            sys.exit(1)
+
+        tech_list = [t.strip() for t in built_with.split(",")] if built_with else None
+
+        links = {}
+        if github:
+            links["github"] = github
+        if demo:
+            links["demo"] = demo
+        if video:
+            links["video"] = video
+
+        async with AuthenticatedClient(email=email, password=password, headed=_cli_config.get("headed", False)) as client:
+            result = await client.submit_project(
+                hackathon_slug=hackathon_slug,
+                title=title,
+                tagline=tagline,
+                description=final_description,
+                built_with=tech_list,
+                links=links if links else None,
+                image_paths=None,
+                dry_run=dry_run,
+            )
+
+            if result.get("error"):
+                console.print(f"[red]Error:[/red] {result['error']}")
+                sys.exit(1)
+
+            if dry_run:
+                console.print(f"[yellow]=== DRY RUN - No changes made ===[/yellow]")
+                console.print(f"\n[bold]Would submit to:[/bold] {hackathon_slug}")
+                console.print(f"[bold]Project title:[/bold] {title}")
+                console.print(f"[bold]Tagline:[/bold] {tagline}")
+                if tech_list:
+                    console.print(f"[bold]Built with:[/bold] {', '.join(tech_list)}")
+                if links:
+                    console.print(f"[bold]Links:[/bold]")
+                    for k, v in links.items():
+                        console.print(f"  {k}: {v}")
+            else:
+                console.print(f"\n[green]✓ Successfully submitted![/green]")
+                console.print(f"\n[bold]Project Details:[/bold]")
+                console.print(f"  url: {result.get('url', 'N/A')}")
+                console.print(f"  title: {result['project_title']}")
+
+    _run_async(_submit())
+
+
+
+@cli.command()
 @click.argument("project_url")
 @click.option("--title", "-t", help="New title")
 @click.option("--tagline", "-tag", help="New tagline")

@@ -19,7 +19,7 @@ iwr https://raw.githubusercontent.com/mintychochip/devpost-skill/main/install.ps
 ```bash
 devpost hackathons                    # Browse
 devpost search "AI"                   # Search
-devpost project submit <slug> --title "..." --tagline "..."  # Submit
+devpost submit rapid-agent -t "Project" --tagline "Tagline"  # Submit
 devpost my-submissions                # List yours
 ```
 
@@ -34,7 +34,7 @@ devpost my-submissions                # List yours
 | `get <slug> -t <type>` | Get winners, rules, etc |
 | `user <username>` | User profile |
 | `evaluate <slug>` | Evaluate hackathon |
-| `project submit <slug>` | Submit project |
+| `submit <slug>` | Submit project |
 | `team create <slug>` | Create team |
 | `my-submissions` | Your projects |
 

@@ -55,6 +55,7 @@ devpost team create --help
 ### Submission Management
 | Command | Description | Key Flags |
 |---------|-------------|-----------|
+| `devpost submit <slug>` | Submit new project | `-t`, `--tagline`, `-d`, `--github`, `--dry-run` |
 | `devpost update <url>` | Update submission | `--title`, `--tagline`, `--github`, `--dry-run` |
 | `devpost delete <url>` | Delete submission | `--confirm` |
 | `devpost upload <url> <imgs...>` | Upload screenshots | `--set-main` |
