@@ -15,6 +15,7 @@ from .core import (
     AuthenticatedClient,
     DevpostClient,
     DevpostError,
+    BASE_URL,
     clear_credentials,
     save_credentials_interactive,
     get_credentials,
@@ -703,6 +704,69 @@ def user(username: str, is_json: Optional[bool], verbose: bool):
             ))
 
     _run_async(_user())
+
+
+@cli.command()
+@click.argument("username")
+@click.option("--json", "is_json", flag_value=True, default=None, help="Output as JSON (auto-detected if stdout is not a TTY)")
+@click.option("--verbose", "-v", is_flag=True, help="Show full achievement details with descriptions")
+def achievements(username: str, is_json: Optional[bool], verbose: bool):
+    """Get user achievements/badges.
+    
+    Uses browser automation to extract achievement badges, medals, and awards
+    from the user's achievements page.
+    
+    \b
+    Examples:
+      devpost achievements tech-dawg015
+      devpost achievements mintychochip --json
+      devpost achievements alexrchen --verbose
+    """
+    async def _achievements():
+        async with DevpostClient(headed=_cli_config.get("headed", False)) as client:
+            result = await client.get_user_achievements(username)
+
+            if output_json(result, is_json):
+                return
+
+            if not result.get("success"):
+                console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/red]")
+                sys.exit(1)
+
+            data = result.get("data", {})
+            achievements_list = data.get("achievements", [])
+            total_count = data.get("total_count", len(achievements_list))
+            
+            lines = [
+                f"[bold cyan]{username}[/bold cyan]",
+                f"[green]Achievements page:[/green] {BASE_URL}/{username}/achievements",
+                f"\n[green]Total achievements:[/green] {total_count}",
+            ]
+            
+            if achievements_list:
+                lines.append("\n[bold]Achievement List:[/bold]")
+                for a in achievements_list[:20]:
+                    title = a.get('title', 'Unknown')
+                    lines.append(f"  • [bold]{title}[/bold]")
+                    
+                    if verbose:
+                        if a.get('description'):
+                            lines.append(f"    [dim]{a['description'][:200]}[/dim]")
+                        if a.get('earned'):
+                            lines.append(f"    [green]Earned:[/green] {a['earned']}")
+                    
+                    if len(achievements_list) > 20:
+                        lines.append(f"  [dim]... and {len(achievements_list) - 20} more[/dim]")
+            else:
+                lines.append("\n[dim]No achievements found.[/dim]")
+
+            console.print(Panel(
+                "\n".join(lines),
+                title="User Achievements",
+                border_style="blue"
+            ))
+
+    _run_async(_achievements())
 
 
 @cli.command()

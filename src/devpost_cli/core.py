@@ -1288,6 +1288,134 @@ class DevpostClient:
 
         return result
 
+    async def get_user_achievements(self, username: str) -> dict[str, Any]:
+        """Get user achievements/badges using Playwright (JS-rendered page)."""
+        cache_key = f"user_achievements_{username}"
+        if self._cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            return {
+                "error": "Playwright not installed. Install with: pip install playwright && playwright install chromium",
+                "code": "DEPENDENCY_MISSING",
+            }
+
+        result = {"success": False, "username": username, "steps": [], "data": {"achievements": [], "total_count": 0}}
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=not self.headed)
+            page = await browser.new_page()
+
+            try:
+                achievements_url = f"{BASE_URL}/{username}/achievements"
+                result["steps"].append(f"Loading {achievements_url}")
+                await page.goto(achievements_url, timeout=30000)
+                await page.wait_for_load_state("networkidle")
+                await asyncio.sleep(5)
+
+                data = {"achievements": [], "total_count": 0}
+
+                # Check if page is 404
+                if "404" in await page.title():
+                    result["error"] = f"User '{username}' not found"
+                    result["code"] = "NOT_FOUND"
+                    return result
+
+                # Extract total count from nav or page header
+                try:
+                    nav_link = await page.query_selector("a[href*='/achievements']")
+                    if nav_link:
+                        count_elem = await nav_link.query_selector(".totals span")
+                        if count_elem:
+                            count_text = await count_elem.text_content()
+                            if count_text:
+                                data["total_count"] = int(count_text.strip())
+                except Exception:
+                    logger.debug("Could not extract achievement count")
+
+                # Extract achievement cards
+                try:
+                    achievements = []
+                    
+                    # Devpost achievements: .content divs contain h5 title + p description
+                    # The .badge wrapper elements are empty in JS-rendered DOM
+                    achievement_cards = await page.query_selector_all("div.content")
+                    logger.debug("Found %d achievement cards", len(achievement_cards))
+                    
+                    for i, card in enumerate(achievement_cards[:50]):
+                        achievement_info = {}
+                        logger.debug("Processing card %d", i)
+                        
+                        # Extract title from h5
+                        title_elem = await card.query_selector("h5")
+                        if title_elem:
+                            title = await title_elem.text_content()
+                            logger.debug("Card %d title: %r", i, title)
+                            if title:
+                                achievement_info["title"] = " ".join(title.split()).strip()
+                        else:
+                            logger.debug("Card %d: no h5 element", i)
+                        
+                        # Extract description from p (first p that's not progression)
+                        desc_elems = await card.query_selector_all("p")
+                        for p_elem in desc_elems:
+                            p_class = await p_elem.get_attribute("class") or ""
+                            if "progression" not in p_class:
+                                p_text = await p_elem.text_content()
+                                if p_text:
+                                    achievement_info["description"] = " ".join(p_text.split()).strip()
+                                    break
+                        
+                        # Extract earned date from small.achieved-at
+                        date_elem = await card.query_selector("small.achieved-at, small.faded")
+                        if date_elem:
+                            date_text = await date_elem.text_content()
+                            if date_text:
+                                achievement_info["earned"] = " ".join(date_text.split()).strip()
+                        
+                        # Extract image/badge URL from sibling img
+                        parent = await card.query_selector("xpath=..")
+                        if parent:
+                            img_elem = await parent.query_selector("img")
+                            if img_elem:
+                                img_src = await img_elem.get_attribute("src")
+                                if img_src:
+                                    achievement_info["badge_url"] = img_src if img_src.startswith("http") else f"{BASE_URL}{img_src}"
+                        
+                        logger.debug("Card %d info: %r", i, achievement_info)
+                        
+                        # Only add if we have at least a title
+                        if achievement_info.get("title"):
+                            achievements.append(achievement_info)
+                            logger.debug("Added achievement: %s", achievement_info["title"])
+                    
+                    logger.debug("Total achievements extracted: %d", len(achievements))
+                    data["achievements"] = achievements
+                    if not data["total_count"]:
+                        data["total_count"] = len(achievements)
+                        
+                except Exception as e:
+                    logger.exception("Could not extract achievements: %s", e)
+
+                result["data"] = data
+                result["success"] = True
+                result["steps"].append("Successfully extracted achievements")
+
+            except Exception as e:
+                result["error"] = str(e)
+                result["steps"].append(f"Error: {e}")
+            finally:
+                await browser.close()
+
+        if result["success"] and self._cache:
+            self._cache.set(cache_key, result, ttl=3600)
+
+        return result
+
     async def parse_rules_page(self, slug: str) -> dict[str, Any]:
         """Parse a hackathon's rules page into structured sections."""
         validate_slug(slug)
